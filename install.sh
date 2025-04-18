@@ -7798,19 +7798,21 @@ vlessChainRoutingMenu() {
         2)
             prepareVlessChainOutbound
             addVlessChainRoute
+            reloadCore
             ;;
         3)
             prepareVlessChainOutbound
             addVlessChainRoute "global"
+            reloadCore
             ;;
         4)
             removeVlessChainRoute
+            reloadCore
             ;;
         *)
             echoContent red " ---> 选择错误"
             ;;
     esac
-    reloadCore
 }
 
 # 查看已分流域名
