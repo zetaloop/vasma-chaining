@@ -8000,16 +8000,26 @@ addVlessChainRoute() {
     if [[ "${mode}" != "global" ]]; then
         local currentDomains=""
         if [[ -f "${configPath}09_routing.json" ]]; then
-            currentDomains=$(jq -r -c \
+            currentDomains=$(jq -r \
               '.routing.rules[]|
-                select(.outboundTag=="'"${vlessChainTag}"'")|
-                .domain[]' "${configPath}09_routing.json" | \
-              paste -sd "," -)
+               select(.outboundTag=="'"${vlessChainTag}"'")|
+               .domain[]' "${configPath}09_routing.json" |
+              sed -E 's/^(domain:|geosite:)//' )
         elif [[ -f "${singBoxConfigPath}${vlessChainTag}_route.json" ]]; then
-            currentDomains=$(jq -r -c \
-              '.route.rules[]|
-                .domain[]' "${singBoxConfigPath}${vlessChainTag}_route.json" | \
-              paste -sd "," -)
+            # 1) rule_set → 取下划线前的部分
+            local rs
+            rs=$(jq -r '.route.rules[]|.rule_set[]?'
+                  "${singBoxConfigPath}${vlessChainTag}_route.json" |
+                 cut -d '_' -f 1)
+            # 2) domain_regex → 提取裸域名
+            local dr
+            dr=$(jq -r '.route.rules[]|.domain_regex[]?'
+                  "${singBoxConfigPath}${vlessChainTag}_route.json" |
+                 sed -E 's/\\\././g;
+                          s/^\^\(\[^\)]*\)//;
+                          s/^\^//; s/\$//')
+            currentDomains=$(printf "%s\n%s\n%s" "${currentDomains}" "${rs}" "${dr}" |
+                             grep -v '^$' | sort -u | paste -sd "," -)
         fi
         [[ -n "${currentDomains}" ]] && \
             echoContent yellow "当前域名：${currentDomains}\n"
