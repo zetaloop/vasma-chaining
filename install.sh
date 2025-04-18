@@ -7237,6 +7237,7 @@ routingToolsMenu() {
     echoContent yellow "5.DNS分流"
     #    echoContent yellow "6.VMess+WS+TLS分流"
     echoContent yellow "7.SNI反向代理分流"
+    echoContent yellow "8.VLESS 链式分流"
 
     read -r -p "请选择:" selectType
 
@@ -7267,6 +7268,9 @@ routingToolsMenu() {
             echoContent red "\n ---> 此功能不支持Hysteria2、Tuic"
         fi
         sniRouting 1
+        ;;
+    8)
+        vlessChainRoutingMenu
         ;;
     esac
 
@@ -7772,6 +7776,260 @@ EOF
         routing=$(jq -r ".routing.rules += [{\"type\": \"field\",\"domain\": ${domainRules},\"outboundTag\": \"socks5_outbound\"}]" ${configPath}09_routing.json)
         echo "${routing}" | jq . >${configPath}09_routing.json
     fi
+}
+
+# VLESS 链式分流标签
+vlessChainTag="vless_chain_outbound"
+
+# VLESS 链式分流菜单
+vlessChainRoutingMenu() {
+    echoContent skyBlue "\n功能 1/1 : VLESS 链式分流 (Vision / Reality)"
+    echoContent red "\n=============================================================="
+    echoContent yellow "1.查看已分流域名"
+    echoContent yellow "2.添加分流域名"
+    echoContent yellow "3.设为全局转发"
+    echoContent yellow "4.卸载链式分流"
+    read -r -p "请选择:" selectType
+
+    case ${selectType} in
+        1)
+            showVlessChainDomain
+            ;;
+        2)
+            prepareVlessChainOutbound
+            addVlessChainRoute
+            ;;
+        3)
+            prepareVlessChainOutbound
+            addVlessChainRoute "global"
+            ;;
+        4)
+            removeVlessChainRoute
+            ;;
+        *)
+            echoContent red " ---> 选择错误"
+            ;;
+    esac
+    reloadCore
+}
+
+# 查看已分流域名
+showVlessChainDomain() {
+    if [[ "${coreInstallType}" == "1" && -f "${configPath}09_routing.json" ]]; then
+        echoContent yellow "Xray-core:"
+        jq -r -c ".routing.rules[]|select(.outboundTag==\"${vlessChainTag}\")|.domain" "${configPath}09_routing.json" | jq -r
+    fi
+    if [[ -n "${singBoxConfigPath}" && -f "${singBoxConfigPath}${vlessChainTag}_route.json" ]]; then
+        echoContent yellow "sing-box:"
+        jq -r -c ".route.rules[]|.domain" "${singBoxConfigPath}${vlessChainTag}_route.json" | jq -r
+    fi
+}
+
+# 生成或更新 VLESS 出站配置
+prepareVlessChainOutbound() {
+    if [[ -f "${configPath}${vlessChainTag}.json" || -f "${singBoxConfigPath}${vlessChainTag}.json" ]]; then
+        echoContent green " ---> 已检测到 ${vlessChainTag}，跳过解析"
+        return
+    fi
+
+    echoContent yellow "\n请输入落地机 vless:// 链接："
+    read -r -p "链接:" vlessURL
+    if [[ -z "${vlessURL}" || "${vlessURL}" != vless://* ]]; then
+        echoContent red " ---> 链接格式错误"
+        exit 0
+    fi
+
+    # 解析 vless:// 链接
+    local body=${vlessURL#vless://}
+    local uuid=${body%%@*}
+    local hostPort=${body#*@}
+    hostPort=${hostPort%%\?*}
+    local host=${hostPort%%:*}
+    local port=${hostPort#*:}
+    local query=${vlessURL#*\?}
+    query=${query%%#*}
+
+    local security="" flow="" sni="" fp="" publicKey="" shortId=""
+    IFS='&' read -ra kv <<<"${query}"
+    for pair in "${kv[@]}"; do
+        k=${pair%%=*}
+        v=${pair#*=}
+        case $k in
+            security)
+                security=$v
+                ;;
+            flow)
+                flow=$v
+                ;;
+            sni)
+                sni=$v
+                ;;
+            fp)
+                fp=$v
+                ;;
+            publicKey | pbk)
+                publicKey=$v
+                ;;
+            shortId | sid)
+                shortId=$v
+                ;;
+        esac
+    done
+
+    # 协议校验
+    if [[ "${security}" == "tls" && "${flow}" == "xtls-rprx-vision" ]]; then
+        proto="vision"
+    elif [[ "${security}" == "reality" ]]; then
+        proto="reality"
+    else
+        echoContent red " ---> 仅支持 Vision(TLS) 或 Reality 协议"
+        exit 0
+    fi
+
+    # 生成 sing-box 出站配置
+    if [[ -n "${singBoxConfigPath}" ]]; then
+        if [[ "${proto}" == "vision" ]]; then
+            cat >"${singBoxConfigPath}${vlessChainTag}.json" <<EOF
+{
+    "outbounds": [
+        {
+            "type": "vless",
+            "tag": "${vlessChainTag}",
+            "server": "${host}",
+            "server_port": ${port},
+            "uuid": "${uuid}",
+            "flow": "xtls-rprx-vision",
+            "tls": {"enabled": true, "server_name": "${sni}"},
+            "transport": {"type": "tcp"}
+        }
+    ]
+}
+EOF
+        else # Reality
+            cat >"${singBoxConfigPath}${vlessChainTag}.json" <<EOF
+{
+    "outbounds": [
+        {
+            "type": "vless",
+            "tag": "${vlessChainTag}",
+            "server": "${host}",
+            "server_port": ${port},
+            "uuid": "${uuid}",
+            "tls": {
+                "enabled": true,
+                "server_name": "${sni}",
+                "reality": {
+                    "public_key": "${publicKey}",
+                    "short_id": "${shortId}",
+                    "fingerprint": "${fp}"
+                }
+            },
+            "transport": {"type": "tcp"}
+        }
+    ]
+}
+EOF
+        fi
+        addSingBoxOutbound "${vlessChainTag}"
+    fi
+
+    # 生成 Xray-core 出站配置
+    if [[ "${coreInstallType}" == "1" ]]; then
+        if [[ "${proto}" == "vision" ]]; then
+            cat >"${configPath}${vlessChainTag}.json" <<EOF
+{
+    "outbounds": [
+        {
+            "protocol": "vless",
+            "tag": "${vlessChainTag}",
+            "settings": {
+                "vnext": [{"address": "${host}", "port": ${port},
+                    "users": [{"id": "${uuid}", "encryption": "none", "flow": "xtls-rprx-vision"}]}]
+            },
+            "streamSettings": {
+                "network": "tcp",
+                "security": "tls",
+                "tlsSettings": {"serverName": "${sni}"}
+            }
+        }
+    ]
+}
+EOF
+        else
+            cat >"${configPath}${vlessChainTag}.json" <<EOF
+{
+    "outbounds": [
+        {
+            "protocol": "vless",
+            "tag": "${vlessChainTag}",
+            "settings": {
+                "vnext": [{"address": "${host}", "port": ${port},
+                    "users": [{"id": "${uuid}", "encryption": "none"}]}]
+            },
+            "streamSettings": {
+                "network": "tcp",
+                "security": "reality",
+                "realitySettings": {
+                    "serverName": "${sni}",
+                    "publicKey": "${publicKey}",
+                    "shortId": "${shortId}",
+                    "fingerprint": "${fp}"
+                }
+            }
+        }
+    ]
+}
+EOF
+        fi
+        addXrayOutbound "${vlessChainTag}"
+    fi
+    echoContent green " ---> 已创建出站 ${vlessChainTag}"
+}
+
+# 添加分流规则
+addVlessChainRoute() {
+    local mode=$1
+    local domainList=""
+
+    if [[ "${mode}" != "global" ]]; then
+        echoContent yellow "录入示例: netflix,openai,v2ray-agent.com"
+        read -r -p "域名(逗号分隔):" domainList
+        if [[ -z "${domainList}" ]]; then
+            echoContent red " ---> 域名不可为空"
+            exit 0
+        fi
+    fi
+
+    if [[ -n "${singBoxConfigPath}" ]]; then
+        addSingBoxRouteRule "${vlessChainTag}" "${domainList}" "${vlessChainTag}_route"
+        if [[ -z "${domainList}" ]]; then
+            addSingBoxOutbound "01_direct_outbound"
+        fi
+    fi
+    if [[ "${coreInstallType}" == "1" ]]; then
+        if [[ ! -f "${configPath}09_routing.json" ]]; then
+            echo '{"routing":{"rules":[]}}' >"${configPath}09_routing.json"
+        fi
+        unInstallRouting "${vlessChainTag}" outboundTag
+        addInstallRouting "${vlessChainTag}" outboundTag "${domainList}"
+    fi
+    echoContent green " ---> 规则已更新"
+}
+
+# 卸载链式分流
+removeVlessChainRoute() {
+    if [[ "${coreInstallType}" == "1" ]]; then
+        removeXrayOutbound "${vlessChainTag}"
+        unInstallRouting "${vlessChainTag}" outboundTag
+        rm -f "${configPath}${vlessChainTag}.json"
+        addXrayOutbound z_direct_outbound
+    fi
+    if [[ -n "${singBoxConfigPath}" ]]; then
+        removeSingBoxConfig "${vlessChainTag}"
+        removeSingBoxConfig "${vlessChainTag}_route"
+        addSingBoxOutbound "01_direct_outbound"
+    fi
+    echoContent green " ---> 链式分流卸载完毕"
 }
 
 # 设置VMess+WS+TLS【仅出站】
