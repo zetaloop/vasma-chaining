@@ -8001,10 +8001,11 @@ addVlessChainRoute() {
         local currentDomains=""
         if [[ -f "${configPath}09_routing.json" ]]; then
             currentDomains=$(jq -r \
-              '.routing.rules[]|
-               select(.outboundTag=="'"${vlessChainTag}"'")|
-               .domain[]' "${configPath}09_routing.json" |
-              sed -E 's/^(domain:|geosite:)//' )
+            '.routing.rules[]|
+              select(.outboundTag=="'"${vlessChainTag}"'")|
+              .domain[]' "${configPath}09_routing.json" |
+            sed -E 's/^(domain:|geosite:)//g' |
+            paste -sd "," -)
         elif [[ -f "${singBoxConfigPath}${vlessChainTag}_route.json" ]]; then
             # 1) rule_set → 取下划线前的部分
             local rs
@@ -8019,7 +8020,7 @@ addVlessChainRoute() {
                           s/^\^\(\[^\)]*\)//;
                           s/^\^//; s/\$//')
             currentDomains=$(printf "%s\n%s\n%s" "${currentDomains}" "${rs}" "${dr}" |
-                             grep -v '^$' | sort -u | paste -sd "," -)
+                             grep -v '^$' | paste -sd "," -)
         fi
         [[ -n "${currentDomains}" ]] && \
             echoContent yellow "当前域名：${currentDomains}\n"
