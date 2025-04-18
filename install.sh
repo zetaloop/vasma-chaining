@@ -327,6 +327,21 @@ initVar() {
 
 }
 
+# 获取GitHub版本防限流
+get_release_tag() {
+    local url=$1 filter=$2
+    local curl_cmd="curl -sS"
+    [[ -n "${VASMA_GITHUB_TOKEN}" ]] && curl_cmd="${curl_cmd} -H 'Authorization: token ${VASMA_GITHUB_TOKEN}'"
+    local versions
+    versions=$(${curl_cmd} "${url}" | jq -r "${filter}")
+    if [[ -z "${versions}" ]]; then
+        echo "无法获取版本信息，可能是网络问题或 API 限流"
+        echo "请设置环境变量 VASMA_GITHUB_TOKEN 以提高请求限制"
+        exit 1
+    fi
+    echo "${versions}"
+}
+
 # 读取tls证书详情
 readAcmeTLS() {
     local readAcmeDomain=
@@ -2272,7 +2287,7 @@ installV2Ray() {
     if [[ "${coreInstallType}" != "2" && "${coreInstallType}" != "3" ]]; then
         if [[ "${selectCoreType}" == "2" ]]; then
 
-            version=$(curl -s https://api.github.com/repos/v2fly/v2ray-core/releases?per_page=10 | jq -r '.[]|select (.prerelease==false)|.tag_name' | grep -v 'v5' | head -1)
+            version=$(get_release_tag "https://api.github.com/repos/v2fly/v2ray-core/releases?per_page=10" ".[]|select (.prerelease==false)|.tag_name" | grep -v 'v5' | head -1)
         else
             version=${v2rayCoreVersion}
         fi
@@ -2311,7 +2326,7 @@ installSingBox() {
 
     if [[ ! -f "/etc/v2ray-agent/sing-box/sing-box" ]]; then
 
-        version=$(curl -s "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20" | jq -r ".[]|select (.prerelease==${prereleaseStatus})|.tag_name" | head -1)
+        version=$(get_release_tag "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20" ".[]|select (.prerelease==${prereleaseStatus})|.tag_name" | head -1)
 
         echoContent green " ---> sing-box版本:${version}"
 
@@ -2367,7 +2382,7 @@ installXray() {
 
     if [[ ! -f "/etc/v2ray-agent/xray/xray" ]]; then
 
-        version=$(curl -s "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=5" | jq -r ".[]|select (.prerelease==${prereleaseStatus})|.tag_name" | head -1)
+        version=$(get_release_tag "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=5" ".[]|select (.prerelease==${prereleaseStatus})|.tag_name" | head -1)
         echoContent green " ---> Xray-core版本:${version}"
         if [[ "${release}" == "alpine" ]]; then
             wget -c -q -P /etc/v2ray-agent/xray/ "https://github.com/XTLS/Xray-core/releases/download/${version}/${xrayCoreCPUVendor}.zip"
@@ -2384,7 +2399,7 @@ installXray() {
             unzip -o "/etc/v2ray-agent/xray/${xrayCoreCPUVendor}.zip" -d /etc/v2ray-agent/xray >/dev/null
             rm -rf "/etc/v2ray-agent/xray/${xrayCoreCPUVendor}.zip"
 
-            version=$(curl -s https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases?per_page=1 | jq -r '.[]|.tag_name')
+            version=$(get_release_tag "https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases?per_page=1" ".[]|.tag_name")
             echoContent skyBlue "------------------------Version-------------------------------"
             echo "version:${version}"
             rm /etc/v2ray-agent/xray/geo* >/dev/null 2>&1
@@ -2490,10 +2505,10 @@ xrayVersionManageMenu() {
         echoContent yellow "2.不保证回退后一定可以正常使用"
         echoContent yellow "3.如果回退的版本不支持当前的config，则会无法连接，谨慎操作"
         echoContent skyBlue "------------------------Version-------------------------------"
-        curl -s "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=5" | jq -r ".[]|select (.prerelease==false)|.tag_name" | awk '{print ""NR""":"$0}'
+        get_release_tag "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=5" ".[]|select (.prerelease==false)|.tag_name" | awk '{print ""NR""":"$0}'
         echoContent skyBlue "--------------------------------------------------------------"
         read -r -p "请输入要回退的版本:" selectXrayVersionType
-        version=$(curl -s "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=5" | jq -r ".[]|select (.prerelease==false)|.tag_name" | awk '{print ""NR""":"$0}' | grep "${selectXrayVersionType}:" | awk -F "[:]" '{print $2}')
+        version=$(get_release_tag "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=5" ".[]|select (.prerelease==false)|.tag_name" | awk '{print ""NR""":"$0}' | grep "${selectXrayVersionType}:" | awk -F "[:]" '{print $2}')
         if [[ -n "${version}" ]]; then
             updateXray "${version}"
         else
@@ -2519,7 +2534,7 @@ xrayVersionManageMenu() {
 updateGeoSite() {
     echoContent yellow "\n来源 https://github.com/Loyalsoldier/v2ray-rules-dat"
 
-    version=$(curl -s https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases?per_page=1 | jq -r '.[]|.tag_name')
+    version=$(get_release_tag "https://api.github.com/repos/Loyalsoldier/v2ray-rules-dat/releases?per_page=1" ".[]|.tag_name")
     echoContent skyBlue "------------------------Version-------------------------------"
     echo "version:${version}"
     rm ${configPath}../geo* >/dev/null
@@ -2621,7 +2636,7 @@ updateXray() {
         if [[ -n "$1" ]]; then
             version=$1
         else
-            version=$(curl -s "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=5" | jq -r ".[]|select (.prerelease==${prereleaseStatus})|.tag_name" | head -1)
+            version=$(get_release_tag "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=5" ".[]|select (.prerelease==${prereleaseStatus})|.tag_name" | head -1)
         fi
 
         echoContent green " ---> Xray-core版本:${version}"
@@ -2643,7 +2658,7 @@ updateXray() {
         if [[ -n "$1" ]]; then
             version=$1
         else
-            version=$(curl -s "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=10" | jq -r ".[]|select (.prerelease==${prereleaseStatus})|.tag_name" | head -1)
+            version=$(get_release_tag "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=10" ".[]|select (.prerelease==${prereleaseStatus})|.tag_name" | head -1)
         fi
 
         if [[ -n "$1" ]]; then
@@ -9856,7 +9871,7 @@ manageReality() {
 # 安装reality scanner
 installRealityScanner() {
     if [[ ! -f "/etc/v2ray-agent/xray/reality_scan/RealiTLScanner-linux-64" ]]; then
-        version=$(curl -s https://api.github.com/repos/XTLS/RealiTLScanner/releases?per_page=1 | jq -r '.[]|.tag_name')
+        version=$(get_release_tag "https://api.github.com/repos/XTLS/RealiTLScanner/releases?per_page=1" ".[]|.tag_name")
         wget -c -q -P /etc/v2ray-agent/xray/reality_scan/ "https://github.com/XTLS/RealiTLScanner/releases/download/${version}/RealiTLScanner-linux-64"
         chmod 655 /etc/v2ray-agent/xray/reality_scan/RealiTLScanner-linux-64
     fi
