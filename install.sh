@@ -330,10 +330,12 @@ initVar() {
 # 获取GitHub版本防限流
 get_release_tag() {
     local url=$1 filter=$2
-    local curl_cmd="curl -sS"
-    [[ -n "${VASMA_GITHUB_TOKEN}" ]] && curl_cmd="${curl_cmd} -H \"Authorization: token ${VASMA_GITHUB_TOKEN}\""
+    local curl_cmd=(curl -sS)
+    if [[ -n "${VASMA_GITHUB_TOKEN}" ]]; then
+        curl_cmd+=(-H "Authorization: token ${VASMA_GITHUB_TOKEN}")
+    fi
     local versions
-    versions=$(${curl_cmd} "${url}" | jq -r "${filter}")
+    versions=$("${curl_cmd[@]}" "${url}" | jq -r "${filter}")
     if [[ -z "${versions}" ]]; then
         echo "无法获取版本信息，可能是网络问题或 API 限流"
         echo "请设置环境变量 VASMA_GITHUB_TOKEN 以提高请求限制"
