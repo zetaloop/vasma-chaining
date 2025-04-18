@@ -7842,8 +7842,6 @@ prepareVlessChainOutbound() {
         read -r -p "链接:" vlessURL
     fi
 
-    echoContent yellow "\n请输入落地机 vless:// 链接："
-    read -r -p "链接:" vlessURL
     if [[ -z "${vlessURL}" || "${vlessURL}" != vless://* ]]; then
         echoContent red " ---> 链接格式错误"
         exit 0
