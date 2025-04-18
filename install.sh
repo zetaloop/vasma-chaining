@@ -7786,7 +7786,7 @@ vlessChainRoutingMenu() {
     echoContent skyBlue "\n功能 1/1 : VLESS 链式分流 (Vision / Reality)"
     echoContent red "\n=============================================================="
     echoContent yellow "1.查看已分流域名"
-    echoContent yellow "2.添加分流域名"
+    echoContent yellow "2.设定分流域名"
     echoContent yellow "3.设为全局转发"
     echoContent yellow "4.卸载链式分流"
     read -r -p "请选择:" selectType
@@ -7999,8 +7999,25 @@ EOF
 # 添加分流规则
 addVlessChainRoute() {
     local mode=$1
-    local domainList=""
+    if [[ "${mode}" != "global" ]]; then
+        local currentDomains=""
+        if [[ -f "${configPath}09_routing.json" ]]; then
+            currentDomains=$(jq -r -c \
+              '.routing.rules[]|
+                select(.outboundTag=="'"${vlessChainTag}"'")|
+                .domain[]' "${configPath}09_routing.json" | \
+              paste -sd "," -)
+        elif [[ -f "${singBoxConfigPath}${vlessChainTag}_route.json" ]]; then
+            currentDomains=$(jq -r -c \
+              '.route.rules[]|
+                .domain[]' "${singBoxConfigPath}${vlessChainTag}_route.json" | \
+              paste -sd "," -)
+        fi
+        [[ -n "${currentDomains}" ]] && \
+            echoContent yellow "当前域名：${currentDomains}\n"
+    fi
 
+    local domainList=""
     if [[ "${mode}" != "global" ]]; then
         echoContent yellow "录入示例: netflix,openai,v2ray-agent.com"
         read -r -p "域名(逗号分隔):" domainList
