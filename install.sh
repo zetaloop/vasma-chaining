@@ -10068,7 +10068,7 @@ menu() {
     echoContent green "Vasma Chaining v3.4.7\c"
     showInstallStatus
     checkWgetShowProgress
-    echoContent red "=============================================================="
+    echoContent red "\n=============================================================="
     if [[ -n "${coreInstallType}" ]]; then
         echoContent yellow "1.重新安装"
     else
