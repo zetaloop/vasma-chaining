@@ -3,6 +3,7 @@
 该分支仅为上游 [v2ray-agent](https://github.com/mack-a/v2ray-agent) 项目添加了一点儿自用的功能。
 
 - VLESS 链式代理
+- GitHub Token 防止限流
 
 ### 安装
 
