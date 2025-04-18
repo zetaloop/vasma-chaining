@@ -7830,8 +7830,16 @@ showVlessChainDomain() {
 # 生成或更新 VLESS 出站配置
 prepareVlessChainOutbound() {
     if [[ -f "${configPath}${vlessChainTag}.json" || -f "${singBoxConfigPath}${vlessChainTag}.json" ]]; then
-        echoContent green " ---> 已检测到 ${vlessChainTag}，跳过解析"
-        return
+        echoContent yellow "\n已检测到 ${vlessChainTag} 出站。"
+        echoContent yellow "回车保持不变，如需替换请输入新的 vless:// 链接："
+        read -r -p "链接:" vlessURL
+        [[ -z "${vlessURL}" ]] && {
+            echoContent green " ---> 保持现有落地机地址"
+            return
+        }
+    else
+        echoContent yellow "\n请输入落地机 vless:// 链接："
+        read -r -p "链接:" vlessURL
     fi
 
     echoContent yellow "\n请输入落地机 vless:// 链接："
