@@ -2181,7 +2181,9 @@ installCronTLS() {
 installCronUpdateGeo() {
     if [[ "${coreInstallType}" == "1" ]]; then
         if crontab -l | grep -q "UpdateGeo"; then
-            echoContent red "\n ---> 已添加自动更新定时任务，请不要重复添加"
+            echoContent skyBlue "\n进度 1/1 : 删除定时更新geo文件任务"
+            crontab -l | grep -v 'UpdateGeo' | crontab -
+            echoContent green " ---> 删除定时更新geo文件任务成功"
             exit 0
         fi
         echoContent skyBlue "\n进度 1/1 : 添加定时更新geo文件"
@@ -2496,7 +2498,7 @@ xrayVersionManageMenu() {
     echoContent yellow "5.打开Xray-core"
     echoContent yellow "6.重启Xray-core"
     echoContent yellow "7.更新geosite、geoip"
-    echoContent yellow "8.设置自动更新geo文件[每天凌晨更新]"
+    echoContent yellow "8.设置/取消自动更新geo文件[每天凌晨更新]"
     echoContent yellow "9.查看日志"
     echoContent red "=============================================================="
     read -r -p "请选择:" selectXrayType
