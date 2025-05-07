@@ -3,6 +3,7 @@
 该分支仅为上游 [mack-a/v2ray-agent](https://github.com/mack-a/v2ray-agent) 项目添加了一点儿好玩的功能。
 
 - VLESS 链式代理
+- 全局优先直连
 - 可以取消 geosite 自动更新任务
 - 可以使用 GitHub Token 防止限流
 
