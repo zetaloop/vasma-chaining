@@ -7849,7 +7849,10 @@ showVlessChainDomain() {
     fi
     if [[ -n "${singBoxConfigPath}" && -f "${singBoxConfigPath}${vlessChainTag}_route.json" ]]; then
         echoContent yellow "sing-box:"
-        jq -r -c ".route.rules[]|.domain" "${singBoxConfigPath}${vlessChainTag}_route.json" | jq -r
+        # 显示 rule_set 和 domain_regex
+        local rs=$(jq -r '.route.rules[]|select(.outbound=="'"${vlessChainTag}"'")|.rule_set[]?' "${singBoxConfigPath}${vlessChainTag}_route.json" | cut -d '_' -f 1)
+        local dr=$(jq -r '.route.rules[]|select(.outbound=="'"${vlessChainTag}"'")|.domain_regex[]?' "${singBoxConfigPath}${vlessChainTag}_route.json" | sed -E 's/\\\././g; s/^\^\(\[^\)]*\)//; s/^\^//; s/\$//')
+        printf "%s\n%s\n" "${rs}" "${dr}" | grep -v '^$'
     fi
 }
 
