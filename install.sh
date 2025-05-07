@@ -7264,6 +7264,7 @@ routingToolsMenu() {
     #    echoContent yellow "6.VMess+WS+TLS分流"
     echoContent yellow "7.SNI反向代理分流"
     echoContent yellow "8.VLESS 链式分流"
+    echoContent yellow "9.设定全局优先直连"
 
     read -r -p "请选择:" selectType
 
@@ -7297,6 +7298,10 @@ routingToolsMenu() {
         ;;
     8)
         vlessChainRoutingMenu
+        ;;
+    9)
+        addGlobalDirectRoute
+        reloadCore
         ;;
     esac
 
@@ -7841,8 +7846,136 @@ vlessChainRoutingMenu() {
     esac
 }
 
+# 添加全局优先直连规则
+addGlobalDirectRoute() {
+    local currentDomains=""
+    local directTag="z_direct_outbound" # Xray 直连标签
+    local singboxDirectTag="01_direct_outbound" # sing-box 直连标签
+    local directRouteFileSingbox="${singBoxConfigPath}00_direct_route.json" # sing-box 优先直连规则文件
+
+    # 显示当前直连域名 (Xray)
+    if [[ "${coreInstallType}" == "1" && -f "${configPath}09_routing.json" ]]; then
+        currentDomains=$(jq -r \
+        '.routing.rules[]|
+          select(.outboundTag=="'"${directTag}"'" and .domain != null and (.domain | map(startswith("geosite:") or startswith("domain:")) | all))|
+          .domain[]' "${configPath}09_routing.json" |
+        sed -E 's/^(domain:|geosite:)//g' |
+        paste -sd "," -)
+    # 显示当前直连域名 (sing-box)
+    elif [[ -n "${singBoxConfigPath}" && -f "${directRouteFileSingbox}" ]]; then
+         local rs
+         rs=$(jq -r '.route.rules[]|select(.outbound=="'"${singboxDirectTag}"'")|.rule_set[]?' "${directRouteFileSingbox}" | cut -d '_' -f 1)
+         local dr
+         dr=$(jq -r '.route.rules[]|select(.outbound=="'"${singboxDirectTag}"'")|.domain_regex[]?' "${directRouteFileSingbox}" | sed -E 's/\\\././g; s/^\^\(\[^\)]*\)//; s/^\^//; s/\$//')
+         currentDomains=$(printf "%s\n%s" "${rs}" "${dr}" | grep -v '^$' | paste -sd "," -)
+    fi
+
+    [[ -n "${currentDomains}" ]] && \
+        echoContent yellow "当前优先直连域名：${currentDomains}\n"
+
+    echoContent yellow "请输入要优先直连的域名/Geosite (逗号分隔, 会覆盖之前的设置)"
+    echoContent yellow "录入示例: google.com,geosite:google,github.com"
+    read -r -p "域名:" domainList
+
+    if [[ -z "${domainList}" ]]; then
+        echoContent red " ---> 域名列表不能为空"
+        # 选择是否清空现有规则
+        read -r -p "是否清空现有的优先直连规则? [y/n]:" clearDirectRules
+        if [[ "${clearDirectRules}" != "y" ]]; then
+            echoContent yellow " ---> 操作取消"
+            return
+        fi
+        domainList=""
+    fi
+
+    # --- 修改 Xray-core 路由 ---
+    if [[ "${coreInstallType}" == "1" ]]; then
+        if [[ ! -f "${configPath}09_routing.json" ]]; then
+            echo '{"routing":{"rules":[]}}' >"${configPath}09_routing.json"
+        fi
+        # 移除旧的直连规则 (基于 directTag 和 domain/geosite 格式)
+        local temp_routing
+        temp_routing=$(jq 'del(.routing.rules[] | select(.outboundTag == "'"${directTag}"'" and .domain != null and (.domain | map(startswith("geosite:") or startswith("domain:")) | all)))' "${configPath}09_routing.json")
+        echo "${temp_routing}" | jq . > "${configPath}09_routing.json"
+
+        if [[ -n "${domainList}" ]]; then
+            # 添加新的直连规则到最前面
+            local direct_rule='{"type": "field", "outboundTag": "'"${directTag}"'", "domain": []}'
+            local domains_array='[]'
+            while IFS=',' read -ra ADDR; do
+                for i in "${ADDR[@]}"; do
+                    local item=$(echo "$i" | xargs)
+                    if [[ -n "$item" ]]; then
+                        if [[ "$item" == geosite:* || "$item" == domain:* ]]; then
+                           domains_array=$(echo "${domains_array}" | jq --arg item "$item" '. += [$item]')
+                        elif curl -s "https://api.github.com/repos/v2fly/domain-list-community/contents/data/${item}" | jq -e .name > /dev/null; then
+                           domains_array=$(echo "${domains_array}" | jq --arg item "geosite:$item" '. += [$item]')
+                        else
+                           domains_array=$(echo "${domains_array}" | jq --arg item "domain:$item" '. += [$item]')
+                        fi
+                    fi
+                done
+            done <<< "$domainList,"
+
+            direct_rule=$(echo "${direct_rule}" | jq --argjson domains "${domains_array}" '.domain = $domains')
+
+            # 将新规则插入到 rules 数组的开头
+            temp_routing=$(jq --argjson rule "${direct_rule}" '.routing.rules = [$rule] + .routing.rules' "${configPath}09_routing.json")
+            echo "${temp_routing}" | jq . > "${configPath}09_routing.json"
+            addXrayOutbound "${directTag}"
+        fi
+        echoContent green " ---> Xray-core 优先直连规则已更新"
+    fi
+
+    # --- 修改 sing-box 路由 ---
+    if [[ -n "${singBoxConfigPath}" ]]; then
+        # 使用 00_ 开头的文件名确保最高优先级
+        local directRouteFile="${singBoxConfigPath}00_direct_route.json"
+
+        # 清空或创建直连规则文件
+        echo '{"route":{"rules":[]}}' > "${directRouteFile}"
+
+        if [[ -n "${domainList}" ]]; then
+            # 手动构建规则并写入优先文件
+            local rules_json
+            rules_json=$(initSingBoxRules "${domainList}" "direct")
+            local domainRules=$(echo "${rules_json}" | jq .domainRules)
+            local ruleSet=$(echo "${rules_json}" | jq .ruleSet)
+            local ruleSetTag=[]
+            [[ "$(echo "${ruleSet}" | jq '.|length')" != "0" ]] && ruleSetTag=$(echo "${ruleSet}" | jq '.|map(.tag)')
+
+            cat <<EOF >"${directRouteFile}"
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": ${ruleSetTag},
+        "domain_regex": ${domainRules},
+        "outbound": "${singboxDirectTag}"
+      }
+    ],
+    "rule_set": ${ruleSet}
+  }
+}
+EOF
+            # 清理空的 rule_set 数组
+            jq 'if .route.rule_set == [] then del(.route.rule_set) else . end' "${directRouteFile}" > "${directRouteFile}_tmp" && mv "${directRouteFile}_tmp" "${directRouteFile}"
+            # 确保直连出站存在
+            addSingBoxOutbound "${singboxDirectTag}"
+        else
+             # 如果 domainList 为空，则删除优先文件以清空规则
+             rm -f "${directRouteFile}"
+        fi
+         echoContent green " ---> sing-box 优先直连规则已更新 (存储于 ${directRouteFile})"
+         # singBoxMergeConfig 会自动按文件名顺序合并，00_ 开头的文件会最先合并
+    fi
+
+    echoContent green " ---> 优先直连规则设置完成"
+}
+
 # 查看已分流域名
 showVlessChainDomain() {
+    echoContent skyBlue "\n--- VLESS 链式分流域名 ---"
     if [[ "${coreInstallType}" == "1" && -f "${configPath}09_routing.json" ]]; then
         echoContent yellow "Xray-core:"
         jq -r -c ".routing.rules[]|select(.outboundTag==\"${vlessChainTag}\")|.domain" "${configPath}09_routing.json" | jq -r
