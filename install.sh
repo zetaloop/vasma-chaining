@@ -10208,7 +10208,7 @@ singBoxVersionManageMenu() {
 menu() {
     cd "$HOME" || exit
     echoContent red "\n=============================================================="
-    echoContent green "Vasma Chaining v3.4.8.0\c"
+    echoContent green "Vasma Chaining v3.4.9.0\c"
     showInstallStatus
     checkWgetShowProgress
     echoContent red "\n=============================================================="
