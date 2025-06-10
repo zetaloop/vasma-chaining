@@ -2455,11 +2455,11 @@ v2rayVersionManageMenu() {
         echoContent yellow "2.不保证回退后一定可以正常使用"
         echoContent yellow "3.如果回退的版本不支持当前的config，则会无法连接，谨慎操作"
         echoContent skyBlue "------------------------Version-------------------------------"
-        curl -s https://api.github.com/repos/v2fly/v2ray-core/releases | jq -r '.[]|select (.prerelease==false)|.tag_name' | grep -v 'v5' | head -5 | awk '{print ""NR""":"$0}'
+        get_release_tag "https://api.github.com/repos/v2fly/v2ray-core/releases?per_page=10" ".[]|select (.prerelease==false)|.tag_name" | grep -v 'v5' | head -5 | awk '{print ""NR""":"$0}'
 
         echoContent skyBlue "--------------------------------------------------------------"
         read -r -p "请输入要回退的版本:" selectV2rayVersionType
-        version=$(curl -s https://api.github.com/repos/v2fly/v2ray-core/releases | jq -r '.[]|select (.prerelease==false)|.tag_name' | grep -v 'v5' | head -5 | awk '{print ""NR""":"$0}' | grep "${selectV2rayVersionType}:" | awk -F "[:]" '{print $2}')
+        version=$(get_release_tag "https://api.github.com/repos/v2fly/v2ray-core/releases?per_page=10" ".[]|select (.prerelease==false)|.tag_name" | grep -v 'v5' | head -5 | awk '{print ""NR""":"$0}' | grep "${selectV2rayVersionType}:" | awk -F "[:]" '{print $2}')
         if [[ -n "${version}" ]]; then
             updateV2Ray "${version}"
         else
@@ -2564,7 +2564,7 @@ updateV2Ray() {
         if [[ -n "$1" ]]; then
             version=$1
         else
-            version=$(curl -s https://api.github.com/repos/v2fly/v2ray-core/releases | jq -r '.[]|select (.prerelease==false)|.tag_name' | grep -v 'v5' | head -1)
+            version=$(get_release_tag "https://api.github.com/repos/v2fly/v2ray-core/releases?per_page=10" ".[]|select (.prerelease==false)|.tag_name" | grep -v 'v5' | head -1)
         fi
         # 使用锁定的版本
         if [[ -n "${v2rayCoreVersion}" ]]; then
@@ -2587,7 +2587,7 @@ updateV2Ray() {
         if [[ -n "$1" ]]; then
             version=$1
         else
-            version=$(curl -s https://api.github.com/repos/v2fly/v2ray-core/releases | jq -r '.[]|select (.prerelease==false)|.tag_name' | grep -v 'v5' | head -1)
+            version=$(get_release_tag "https://api.github.com/repos/v2fly/v2ray-core/releases?per_page=10" ".[]|select (.prerelease==false)|.tag_name" | grep -v 'v5' | head -1)
         fi
 
         if [[ -n "${v2rayCoreVersion}" ]]; then
@@ -7082,7 +7082,7 @@ unInstallWireGuard() {
     fi
 
     if [[ -n "${singBoxConfigPath}" ]]; then
-        if [[ ! -f "${singBoxConfigPath}wireguard_out_IPv6_route.json" && ! -f "${singBoxConfigPath}wireguard_out_IPv4_route.json" ]]; then
+        if [[ ! -f "${singBoxConfigPath}wireguard_endpoints_IPv6_route.json" && ! -f "${singBoxConfigPath}wireguard_endpoints_IPv4_route.json" ]]; then
             rm "${singBoxConfigPath}wireguard_outbound.json" >/dev/null 2>&1
             rm -rf /etc/v2ray-agent/warp/config >/dev/null 2>&1
         fi
@@ -7103,7 +7103,7 @@ removeWireGuardRoute() {
 
     # sing-box
     if [[ -n "${singBoxConfigPath}" ]]; then
-        removeSingBoxRouteRule "wireguard_out_${type}"
+        removeSingBoxRouteRule "wireguard_endpoints_${type}"
     fi
 
     unInstallWireGuard "${type}"
@@ -8173,18 +8173,43 @@ addVlessChainRoute() {
         fi
     fi
 
-    if [[ -n "${singBoxConfigPath}" ]]; then
-        addSingBoxRouteRule "${vlessChainTag}" "${domainList}" "${vlessChainTag}_route"
-        if [[ -z "${domainList}" ]]; then
-            addSingBoxOutbound "01_direct_outbound"
+    if [[ "${mode}" == "global" ]]; then
+        if [[ "${coreInstallType}" == "1" ]]; then
+            removeXrayOutbound IPv4_out
+            removeXrayOutbound IPv6_out
+            removeXrayOutbound z_direct_outbound
+            removeXrayOutbound blackhole_out
+            removeXrayOutbound socks5_outbound
+            removeXrayOutbound wireguard_out_IPv4
+            removeXrayOutbound wireguard_out_IPv6
+            rm ${configPath}09_routing.json >/dev/null 2>&1
         fi
-    fi
-    if [[ "${coreInstallType}" == "1" ]]; then
-        if [[ ! -f "${configPath}09_routing.json" ]]; then
-            echo '{"routing":{"rules":[]}}' >"${configPath}09_routing.json"
+        if [[ -n "${singBoxConfigPath}" ]]; then
+            removeSingBoxConfig IPv4_out
+            removeSingBoxConfig IPv6_out
+            removeSingBoxConfig wireguard_endpoints_IPv4_route
+            removeSingBoxConfig wireguard_endpoints_IPv6_route
+            removeSingBoxConfig wireguard_endpoints_IPv4
+            removeSingBoxConfig wireguard_endpoints_IPv6
+            removeSingBoxConfig IPv6_route
+            removeSingBoxConfig socks5_inbound_route
+            removeSingBoxConfig socks5_outbound_route
+            removeSingBoxConfig 01_direct_outbound
         fi
-        unInstallRouting "${vlessChainTag}" outboundTag
-        addInstallRouting "${vlessChainTag}" outboundTag "${domainList}"
+    else
+        if [[ -n "${singBoxConfigPath}" ]]; then
+            addSingBoxRouteRule "${vlessChainTag}" "${domainList}" "${vlessChainTag}_route"
+            if [[ -z "${domainList}" ]]; then
+                addSingBoxOutbound "01_direct_outbound"
+            fi
+        fi
+        if [[ "${coreInstallType}" == "1" ]]; then
+            if [[ ! -f "${configPath}09_routing.json" ]]; then
+                echo '{"routing":{"rules":[]}}' >"${configPath}09_routing.json"
+            fi
+            unInstallRouting "${vlessChainTag}" outboundTag
+            addInstallRouting "${vlessChainTag}" outboundTag "${domainList}"
+        fi
     fi
     echoContent green " ---> 规则已更新"
 }
