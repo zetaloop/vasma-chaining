@@ -4,6 +4,23 @@
 # 检查系统
 export LANG=en_US.UTF-8
 
+# redefine curl to include GitHub token if provided
+curl() {
+    local args=("$@")
+    local use_token=false
+    for a in "${args[@]}"; do
+        if [[ $a == https://api.github.com/* ]]; then
+            use_token=true
+            break
+        fi
+    done
+    if [[ $use_token == true && -n "$VASMA_GITHUB_TOKEN" ]]; then
+        command curl -H "Authorization: token $VASMA_GITHUB_TOKEN" "${args[@]}"
+    else
+        command curl "${args[@]}"
+    fi
+}
+
 echoContent() {
     case $1 in
     # 红色
