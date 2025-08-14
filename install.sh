@@ -7081,6 +7081,8 @@ routingToolsMenu() {
     echoContent yellow "5.DNS分流"
     #    echoContent yellow "6.VMess+WS+TLS分流"
     echoContent yellow "7.SNI反向代理分流"
+    echoContent yellow "8.VLESS 链式分流"
+    echoContent yellow "9.设定全局优先直连"
 
     read -r -p "请选择:" selectType
 
@@ -7111,6 +7113,13 @@ routingToolsMenu() {
             echoContent red "\n ---> 此功能不支持Hysteria2、Tuic"
         fi
         sniRouting 1
+        ;;
+    8)
+        vlessChainRoutingMenu
+        ;;
+    9)
+        addGlobalDirectRoute
+        reloadCore
         ;;
     esac
 
@@ -7614,6 +7623,330 @@ EOF
         routing=$(jq -r ".routing.rules += [{\"type\": \"field\",\"domain\": ${domainRules},\"outboundTag\": \"socks5_outbound\"}]" ${configPath}09_routing.json)
         echo "${routing}" | jq . >${configPath}09_routing.json
     fi
+}
+
+# VLESS 链式分流标签
+vlessChainTag="vless_chain_outbound"
+
+# VLESS 链式分流菜单
+vlessChainRoutingMenu() {
+    echoContent skyBlue "\n功能 1/1 : VLESS 链式分流 (Vision / Reality)"
+    echoContent red "\n=============================================================="
+    echoContent yellow "1.查看已分流域名"
+    echoContent yellow "2.设定分流域名"
+    echoContent yellow "3.设为全局转发"
+    echoContent yellow "4.卸载链式分流"
+    read -r -p "请选择:" selectType
+    case ${selectType} in
+    1)
+        showVlessChainDomain
+        ;;
+    2)
+        prepareVlessChainOutbound
+        addVlessChainRoute
+        reloadCore
+        ;;
+    3)
+        prepareVlessChainOutbound
+        addVlessChainRoute "global"
+        reloadCore
+        ;;
+    4)
+        removeVlessChainRoute
+        reloadCore
+        ;;
+    *)
+        echoContent red " ---> 选择错误"
+        ;;
+    esac
+}
+
+# 全局优先直连
+addGlobalDirectRoute() {
+    local currentDomains=""
+    local directTag="z_direct_outbound"
+    local singboxDirectTag="01_direct_outbound"
+    local directRouteFileSingbox="${singBoxConfigPath}00_direct_route.json"
+
+    # 当前域名 (Xray)
+    if [[ "${coreInstallType}" == "1" && -f "${configPath}09_routing.json" ]]; then
+        currentDomains=$(jq -r '.routing.rules[]|select(.outboundTag=="'"${directTag}"'" and .domain!=null and (.domain|map(startswith("geosite:") or startswith("domain:"))|all))|.domain[]' "${configPath}09_routing.json" | sed -E 's/^(domain:|geosite:)//g' | paste -sd "," -)
+    elif [[ -n "${singBoxConfigPath}" && -f "${directRouteFileSingbox}" ]]; then
+        local rs dr
+        rs=$(jq -r '.route.rules[]|select(.outbound=="'"${singboxDirectTag}"'")|.rule_set[]?' "${directRouteFileSingbox}" | cut -d '_' -f 1)
+        dr=$(jq -r '.route.rules[]|select(.outbound=="'"${singboxDirectTag}"'")|.domain_regex[]?' "${directRouteFileSingbox}" | sed -E 's/\\\././g; s/^\^\(\[^\)]*\)//; s/^\^//; s/\$//')
+        currentDomains=$(printf "%s\n%s" "${rs}" "${dr}" | grep -v '^$' | paste -sd "," -)
+    fi
+    [[ -n "${currentDomains}" ]] && echoContent yellow "当前优先直连域名：${currentDomains}\n"
+
+    echoContent yellow "请输入要优先直连的域名/Geosite (逗号分隔, 会覆盖之前的设置)"
+    echoContent yellow "录入示例: google.com,geosite:google,github.com"
+    read -r -p "域名:" domainList
+
+    if [[ -z "${domainList}" ]]; then
+        echoContent red " ---> 域名列表为空"
+        read -r -p "是否清空现有优先直连规则? [y/n]:" clearDirectRules
+        if [[ "${clearDirectRules}" != "y" ]]; then
+            echoContent yellow " ---> 操作取消"
+            return
+        fi
+    fi
+
+    # Xray 修改
+    if [[ "${coreInstallType}" == "1" ]]; then
+        [[ ! -f "${configPath}09_routing.json" ]] && echo '{"routing":{"rules":[]}}' >"${configPath}09_routing.json"
+        local tmp
+        tmp=$(jq 'del(.routing.rules[]| select(.outboundTag=="'"${directTag}"'" and .domain!=null and (.domain|map(startswith("geosite:") or startswith("domain:"))|all)))' "${configPath}09_routing.json")
+        echo "${tmp}" | jq . >"${configPath}09_routing.json"
+        if [[ -n "${domainList}" ]]; then
+            local direct_rule='{"type":"field","outboundTag":"'"${directTag}"'","domain":[]}'
+            local domains_array='[]'
+            while IFS=',' read -ra ADDR; do
+                for i in "${ADDR[@]}"; do
+                    local item=$(echo "$i" | xargs)
+                    [[ -z "$item" ]] && continue
+                    if [[ "$item" == geosite:* || "$item" == domain:* ]]; then
+                        domains_array=$(echo "${domains_array}" | jq --arg item "$item" '. += [$item]')
+                    else
+                        local status
+                        status=$(curl -s "https://api.github.com/repos/v2fly/domain-list-community/contents/data/${item}" | jq .message)
+                        if [[ "${status}" == "null" ]]; then
+                            domains_array=$(echo "${domains_array}" | jq --arg item "geosite:$item" '. += [$item]')
+                        else
+                            domains_array=$(echo "${domains_array}" | jq --arg item "domain:$item" '. += [$item]')
+                        fi
+                    fi
+                done
+            done <<<"${domainList},"
+            direct_rule=$(echo "${direct_rule}" | jq --argjson domains "${domains_array}" '.domain=$domains')
+            tmp=$(jq --argjson rule "${direct_rule}" '.routing.rules = [$rule]+.routing.rules' "${configPath}09_routing.json")
+            echo "${tmp}" | jq . >"${configPath}09_routing.json"
+            addXrayOutbound "${directTag}"
+        fi
+        echoContent green " ---> Xray-core 优先直连规则已更新"
+    fi
+
+    # sing-box 修改
+    if [[ -n "${singBoxConfigPath}" ]]; then
+        local directRouteFile="${singBoxConfigPath}00_direct_route.json"
+        echo '{"route":{"rules":[]}}' >"${directRouteFile}"
+        if [[ -n "${domainList}" ]]; then
+            local rules_json domainRules ruleSet ruleSetTag
+            rules_json=$(initSingBoxRules "${domainList}" "direct")
+            domainRules=$(echo "${rules_json}" | jq .domainRules)
+            ruleSet=$(echo "${rules_json}" | jq .ruleSet)
+            ruleSetTag=[]
+            [[ "$(echo "${ruleSet}" | jq '.|length')" != "0" ]] && ruleSetTag=$(echo "${ruleSet}" | jq '.|map(.tag)')
+            cat <<EOF >"${directRouteFile}"
+{
+  "route": {
+    "rules": [
+      {
+        "rule_set": ${ruleSetTag},
+        "domain_regex": ${domainRules},
+        "outbound": "${singboxDirectTag}"
+      }
+    ],
+    "rule_set": ${ruleSet}
+  }
+}
+EOF
+            jq 'if .route.rule_set == [] then del(.route.rule_set) else . end' "${directRouteFile}" >"${directRouteFile}_tmp" && mv "${directRouteFile}_tmp" "${directRouteFile}"
+            addSingBoxOutbound "${singboxDirectTag}"
+        else
+            rm -f "${directRouteFile}"
+        fi
+        echoContent green " ---> sing-box 优先直连规则已更新 (存储于 ${directRouteFile})"
+    fi
+    echoContent green " ---> 优先直连规则设置完成"
+}
+
+# 查看已分流域名
+showVlessChainDomain() {
+    echoContent skyBlue "\n--- VLESS 链式分流域名 ---"
+    if [[ "${coreInstallType}" == "1" && -f "${configPath}09_routing.json" ]]; then
+        echoContent yellow "Xray-core:"
+        jq -r -c ".routing.rules[]|select(.outboundTag==\"${vlessChainTag}\")|.domain" "${configPath}09_routing.json" | jq -r
+    fi
+    if [[ -n "${singBoxConfigPath}" && -f "${singBoxConfigPath}${vlessChainTag}_route.json" ]]; then
+        echoContent yellow "sing-box:"
+        local rs dr
+        rs=$(jq -r '.route.rules[]|select(.outbound=="'"${vlessChainTag}"'")|.rule_set[]?' "${singBoxConfigPath}${vlessChainTag}_route.json" | cut -d '_' -f 1)
+        dr=$(jq -r '.route.rules[]|select(.outbound=="'"${vlessChainTag}"'")|.domain_regex[]?' "${singBoxConfigPath}${vlessChainTag}_route.json" | sed -E 's/\\\././g; s/^\^\(\[^\)]*\)//; s/^\^//; s/\$//')
+        printf "%s\n%s\n" "${rs}" "${dr}" | grep -v '^$'
+    fi
+}
+
+# 生成或更新 VLESS 出站
+prepareVlessChainOutbound() {
+    if [[ -f "${configPath}${vlessChainTag}.json" || -f "${singBoxConfigPath}${vlessChainTag}.json" ]]; then
+        echoContent yellow "\n已检测到 ${vlessChainTag} 出站。"
+        echoContent yellow "回车保持不变，如需替换请输入新的 vless:// 链接："
+        read -r -p "链接:" vlessURL
+        [[ -z "${vlessURL}" ]] && { echoContent green " ---> 保持现有落地机地址"; return; }
+    else
+        echoContent yellow "\n请输入落地机 vless:// 链接："
+        read -r -p "链接:" vlessURL
+    fi
+    if [[ -z "${vlessURL}" || "${vlessURL}" != vless://* ]]; then
+        echoContent red " ---> 链接格式错误"
+        exit 0
+    fi
+    local body uuid hostPort host port query security flow sni fp publicKey shortId proto
+    body=${vlessURL#vless://}
+    uuid=${body%%@*}
+    hostPort=${body#*@}; hostPort=${hostPort%%\?*}
+    host=${hostPort%%:*}; port=${hostPort#*:}
+    query=${vlessURL#*?}; query=${query%%#*}
+    IFS='&' read -ra kv <<<"${query}"
+    for pair in "${kv[@]}"; do
+        k=${pair%%=*}; v=${pair#*=}
+        case $k in
+        security) security=$v ;;
+        flow) flow=$v ;;
+        sni) sni=$v ;;
+        fp) fp=$v ;;
+        publicKey|pbk) publicKey=$v ;;
+        shortId|sid) shortId=$v ;;
+        esac
+    done
+    if [[ "${security}" == "tls" && "${flow}" == "xtls-rprx-vision" ]]; then
+        proto="vision"
+    elif [[ "${security}" == "reality" ]]; then
+        proto="reality"
+    else
+        echoContent red " ---> 仅支持 Vision(TLS) 或 Reality 协议"
+        exit 0
+    fi
+    # sing-box outbound
+    if [[ -n "${singBoxConfigPath}" ]]; then
+        if [[ "${proto}" == "vision" ]]; then
+            cat >"${singBoxConfigPath}${vlessChainTag}.json" <<EOF
+{
+    "outbounds": [
+        {
+            "type": "vless",
+            "tag": "${vlessChainTag}",
+            "server": "${host}",
+            "server_port": ${port},
+            "uuid": "${uuid}",
+            "flow": "xtls-rprx-vision",
+            "tls": {"enabled": true, "server_name": "${sni}"},
+            "transport": {"type": "tcp"}
+        }
+    ]
+}
+EOF
+        else
+            cat >"${singBoxConfigPath}${vlessChainTag}.json" <<EOF
+{
+    "outbounds": [
+        {
+            "type": "vless",
+            "tag": "${vlessChainTag}",
+            "server": "${host}",
+            "server_port": ${port},
+            "uuid": "${uuid}",
+            "tls": {"enabled": true, "server_name": "${sni}", "reality": {"public_key": "${publicKey}", "short_id": "${shortId}", "fingerprint": "${fp}"}},
+            "transport": {"type": "tcp"}
+        }
+    ]
+}
+EOF
+        fi
+        addSingBoxOutbound "${vlessChainTag}"
+    fi
+    # Xray outbound
+    if [[ "${coreInstallType}" == "1" ]]; then
+        if [[ "${proto}" == "vision" ]]; then
+            cat >"${configPath}${vlessChainTag}.json" <<EOF
+{
+    "outbounds": [
+        {
+            "protocol": "vless",
+            "tag": "${vlessChainTag}",
+            "settings": {"vnext": [{"address": "${host}", "port": ${port}, "users": [{"id": "${uuid}", "encryption": "none", "flow": "xtls-rprx-vision"}]}]},
+            "streamSettings": {"network": "tcp", "security": "tls", "tlsSettings": {"serverName": "${sni}"}}
+        }
+    ]
+}
+EOF
+        else
+            cat >"${configPath}${vlessChainTag}.json" <<EOF
+{
+    "outbounds": [
+        {
+            "protocol": "vless",
+            "tag": "${vlessChainTag}",
+            "settings": {"vnext": [{"address": "${host}", "port": ${port}, "users": [{"id": "${uuid}", "encryption": "none"}]}]},
+            "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"serverName": "${sni}", "publicKey": "${publicKey}", "shortId": "${shortId}", "fingerprint": "${fp}"}}
+        }
+    ]
+}
+EOF
+        fi
+        addXrayOutbound "${vlessChainTag}"
+    fi
+    echoContent green " ---> 已创建出站 ${vlessChainTag}"
+}
+
+# 添加分流规则 / 全局
+addVlessChainRoute() {
+    local mode=$1
+    local domainList=""
+    if [[ "${mode}" != "global" ]]; then
+        local currentDomains=""
+        if [[ -f "${configPath}09_routing.json" ]]; then
+            currentDomains=$(jq -r '.routing.rules[]|select(.outboundTag=="'"${vlessChainTag}"'")|.domain[]' "${configPath}09_routing.json" | sed -E 's/^(domain:|geosite:)//g' | paste -sd "," -)
+        elif [[ -f "${singBoxConfigPath}${vlessChainTag}_route.json" ]]; then
+            local rs dr
+            rs=$(jq -r '.route.rules[]|.rule_set[]?' "${singBoxConfigPath}${vlessChainTag}_route.json" | cut -d '_' -f 1)
+            dr=$(jq -r '.route.rules[]|.domain_regex[]?' "${singBoxConfigPath}${vlessChainTag}_route.json" | sed -E 's/\\\././g; s/^\^\(\[^\)]*\)//; s/^\^//; s/\$//')
+            currentDomains=$(printf "%s\n%s" "${rs}" "${dr}" | grep -v '^$' | paste -sd "," -)
+        fi
+        [[ -n "${currentDomains}" ]] && echoContent yellow "当前域名：${currentDomains}\n"
+        echoContent yellow "录入示例: netflix,openai,v2ray-agent.com"
+        read -r -p "域名(逗号分隔):" domainList
+        if [[ -z "${domainList}" ]]; then
+            echoContent red " ---> 域名不可为空"
+            exit 0
+        fi
+    fi
+    if [[ "${mode}" == "global" ]]; then
+        if [[ "${coreInstallType}" == "1" ]]; then
+            removeXrayOutbound IPv4_out; removeXrayOutbound IPv6_out; removeXrayOutbound z_direct_outbound; removeXrayOutbound blackhole_out; removeXrayOutbound socks5_outbound; removeXrayOutbound wireguard_out_IPv4; removeXrayOutbound wireguard_out_IPv6; rm ${configPath}09_routing.json >/dev/null 2>&1
+        fi
+        if [[ -n "${singBoxConfigPath}" ]]; then
+            removeSingBoxConfig IPv4_out; removeSingBoxConfig IPv6_out; removeSingBoxConfig wireguard_endpoints_IPv4_route; removeSingBoxConfig wireguard_endpoints_IPv6_route; removeSingBoxConfig wireguard_endpoints_IPv4; removeSingBoxConfig wireguard_endpoints_IPv6; removeSingBoxConfig IPv6_route; removeSingBoxConfig socks5_inbound_route; removeSingBoxConfig socks5_outbound_route; removeSingBoxConfig 01_direct_outbound
+        fi
+    else
+        if [[ -n "${singBoxConfigPath}" ]]; then
+            addSingBoxRouteRule "${vlessChainTag}" "${domainList}" "${vlessChainTag}_route"
+            [[ -z "${domainList}" ]] && addSingBoxOutbound "01_direct_outbound"
+        fi
+        if [[ "${coreInstallType}" == "1" ]]; then
+            [[ ! -f "${configPath}09_routing.json" ]] && echo '{"routing":{"rules":[]}}' >"${configPath}09_routing.json"
+            unInstallRouting "${vlessChainTag}" outboundTag
+            addInstallRouting "${vlessChainTag}" outboundTag "${domainList}"
+        fi
+    fi
+    echoContent green " ---> 规则已更新"
+}
+
+# 卸载链式分流
+removeVlessChainRoute() {
+    if [[ "${coreInstallType}" == "1" ]]; then
+        removeXrayOutbound "${vlessChainTag}"
+        unInstallRouting "${vlessChainTag}" outboundTag
+        rm -f "${configPath}${vlessChainTag}.json"
+        addXrayOutbound z_direct_outbound
+    fi
+    if [[ -n "${singBoxConfigPath}" ]]; then
+        removeSingBoxConfig "${vlessChainTag}"
+        removeSingBoxConfig "${vlessChainTag}_route"
+        addSingBoxOutbound "01_direct_outbound"
+    fi
+    echoContent green " ---> 链式分流卸载完毕"
 }
 
 # 设置VMess+WS+TLS【仅出站】
