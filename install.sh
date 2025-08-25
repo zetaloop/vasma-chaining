@@ -7810,6 +7810,7 @@ prepareVlessChainOutbound() {
         shortId|sid) shortId=$v ;;
         esac
     done
+    sni=${sni:-$host}
     if [[ "${security}" == "tls" && "${flow}" == "xtls-rprx-vision" ]]; then
         proto="vision"
     elif [[ "${security}" == "reality" ]]; then
@@ -7847,14 +7848,21 @@ EOF
             "server": "${host}",
             "server_port": ${port},
             "uuid": "${uuid}",
-            "tls": {"enabled": true, "server_name": "${sni}", "reality": {"public_key": "${publicKey}", "short_id": "${shortId}", "fingerprint": "${fp}"}},
+            "tls": {
+                "enabled": true,
+                "server_name": "${sni}",
+                "reality": {
+                    "enabled": true,
+                    "public_key": "${publicKey}",
+                    "short_id": "${shortId}"
+                }
+            },
             "transport": {"type": "tcp"}
         }
     ]
 }
 EOF
         fi
-        addSingBoxOutbound "${vlessChainTag}"
     fi
     # Xray outbound
     if [[ "${coreInstallType}" == "1" ]]; then
@@ -7917,12 +7925,12 @@ addVlessChainRoute() {
             removeXrayOutbound IPv4_out; removeXrayOutbound IPv6_out; removeXrayOutbound z_direct_outbound; removeXrayOutbound blackhole_out; removeXrayOutbound socks5_outbound; removeXrayOutbound wireguard_out_IPv4; removeXrayOutbound wireguard_out_IPv6; rm ${configPath}09_routing.json >/dev/null 2>&1
         fi
         if [[ -n "${singBoxConfigPath}" ]]; then
-            removeSingBoxConfig IPv4_out; removeSingBoxConfig IPv6_out; removeSingBoxConfig wireguard_endpoints_IPv4_route; removeSingBoxConfig wireguard_endpoints_IPv6_route; removeSingBoxConfig wireguard_endpoints_IPv4; removeSingBoxConfig wireguard_endpoints_IPv6; removeSingBoxConfig IPv6_route; removeSingBoxConfig socks5_inbound_route; removeSingBoxConfig socks5_outbound_route; removeSingBoxConfig 01_direct_outbound
+            removeSingBoxConfig IPv4_out; removeSingBoxConfig IPv6_out; removeSingBoxConfig wireguard_endpoints_IPv4_route; removeSingBoxConfig wireguard_endpoints_IPv6_route; removeSingBoxConfig wireguard_endpoints_IPv4; removeSingBoxConfig wireguard_endpoints_IPv6; removeSingBoxConfig IPv6_route; removeSingBoxConfig socks5_inbound_route; removeSingBoxConfig socks5_outbound_route; removeSingBoxConfig 01_direct_outbound; removeSingBoxConfig socks5_outbound
         fi
     else
         if [[ -n "${singBoxConfigPath}" ]]; then
             addSingBoxRouteRule "${vlessChainTag}" "${domainList}" "${vlessChainTag}_route"
-            [[ -z "${domainList}" ]] && addSingBoxOutbound "01_direct_outbound"
+            [[ -n "${domainList}" ]] && addSingBoxOutbound "01_direct_outbound"
         fi
         if [[ "${coreInstallType}" == "1" ]]; then
             [[ ! -f "${configPath}09_routing.json" ]] && echo '{"routing":{"rules":[]}}' >"${configPath}09_routing.json"
