@@ -7765,6 +7765,10 @@ prepareVlessChainOutbound() {
         esac
     done
     sni=${sni:-$host}
+    local userFlowField=""
+    if [[ -n "${flow}" ]]; then
+        userFlowField=", \"flow\": \"${flow}\""
+    fi
     if [[ "${security}" == "tls" && "${flow}" == "xtls-rprx-vision" ]]; then
         proto="vision"
     elif [[ "${security}" == "reality" ]]; then
@@ -7827,7 +7831,7 @@ EOF
         {
             "protocol": "vless",
             "tag": "${vlessChainTag}",
-            "settings": {"vnext": [{"address": "${host}", "port": ${port}, "users": [{"id": "${uuid}", "encryption": "none", "flow": "xtls-rprx-vision"}]}]},
+            "settings": {"vnext": [{"address": "${host}", "port": ${port}, "users": [{"id": "${uuid}", "encryption": "none"${userFlowField}}]}]},
             "streamSettings": {"network": "tcp", "security": "tls", "tlsSettings": {"serverName": "${sni}"}}
         }
     ]
@@ -7840,7 +7844,7 @@ EOF
         {
             "protocol": "vless",
             "tag": "${vlessChainTag}",
-            "settings": {"vnext": [{"address": "${host}", "port": ${port}, "users": [{"id": "${uuid}", "encryption": "none"}]}]},
+            "settings": {"vnext": [{"address": "${host}", "port": ${port}, "users": [{"id": "${uuid}", "encryption": "none"${userFlowField}}]}]},
             "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"serverName": "${sni}", "publicKey": "${publicKey}", "shortId": "${shortId}", "fingerprint": "${fp}"}}
         }
     ]
