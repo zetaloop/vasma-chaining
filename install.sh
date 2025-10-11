@@ -7723,6 +7723,25 @@ addGlobalDirectRoute() {
             echo "${tmp}" | jq . >"${configPath}09_routing.json"
             addXrayOutbound "${directTag}"
         fi
+        if [[ -f "${configPath}09_routing.json" ]]; then
+            local fallbackTag=""
+            if [[ -f "${configPath}${vlessChainTag}.json" ]] && ! jq -e '.routing.rules[]? | select(.outboundTag=="'"${vlessChainTag}"'")' "${configPath}09_routing.json" >/dev/null; then
+                fallbackTag="${vlessChainTag}"
+            else
+                for candidate in wireguard_out_IPv4 wireguard_out_IPv6 IPv6_out socks5_outbound; do
+                    if [[ -f "${configPath}${candidate}.json" ]] && ! jq -e '.routing.rules[]? | select(.outboundTag=="'"${candidate}"'")' "${configPath}09_routing.json" >/dev/null; then
+                        fallbackTag="${candidate}"
+                        break
+                    fi
+                done
+            fi
+            if [[ -n "${fallbackTag}" ]] && ! jq -e '.routing.rules[]? | select(.outboundTag=="'"${fallbackTag}"'" and (.network|type=="array") and (.network|index("tcp")!=null) and (.network|index("udp")!=null))' "${configPath}09_routing.json" >/dev/null; then
+                local fallbackRule routingWithFallback
+                fallbackRule='{"type":"field","network":["tcp","udp"],"outboundTag":"'"${fallbackTag}"'"}'
+                routingWithFallback=$(jq --argjson rule "${fallbackRule}" '.routing.rules += [$rule]' "${configPath}09_routing.json")
+                echo "${routingWithFallback}" | jq . >"${configPath}09_routing.json"
+            fi
+        fi
         echoContent green " ---> Xray-core 优先直连规则已更新"
     fi
 
