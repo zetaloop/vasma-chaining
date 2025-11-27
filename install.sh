@@ -7958,7 +7958,7 @@ addVlessChainRoute() {
         if [[ "${coreInstallType}" == "1" ]]; then
             [[ ! -f "${configPath}09_routing.json" ]] && echo '{"routing":{"rules":[]}}' >"${configPath}09_routing.json"
             unInstallRouting "${vlessChainTag}" outboundTag
-            addInstallRouting "${vlessChainTag}" outboundTag "${domainList}"
+            addXrayRouting "${vlessChainTag}" outboundTag "${domainList}"
         fi
     fi
     echoContent green " ---> 规则已更新"
