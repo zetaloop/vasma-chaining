@@ -8086,13 +8086,9 @@ addGlobalDirectRoute() {
                     if [[ "$item" == geosite:* || "$item" == domain:* ]]; then
                         domains_array=$(echo "${domains_array}" | jq --arg item "$item" '. += [$item]')
                     else
-                        local status
-                        status=$(curl -s "https://api.github.com/repos/v2fly/domain-list-community/contents/data/${item}" | jq .message)
-                        if [[ "${status}" == "null" ]]; then
-                            domains_array=$(echo "${domains_array}" | jq --arg item "geosite:$item" '. += [$item]')
-                        else
-                            domains_array=$(echo "${domains_array}" | jq --arg item "domain:$item" '. += [$item]')
-                        fi
+                        local matchedRuleValue
+                        matchedRuleValue=$(getDLCMatchedRuleValue "${item}" "/etc/v2ray-agent/xray")
+                        domains_array=$(echo "${domains_array}" | jq --arg item "${matchedRuleValue}" '. += [$item]')
                     fi
                 done
             done <<<"${domainList},"
@@ -8336,7 +8332,7 @@ addVlessChainRoute() {
         if [[ "${coreInstallType}" == "1" ]]; then
             [[ ! -f "${configPath}09_routing.json" ]] && echo '{"routing":{"rules":[]}}' >"${configPath}09_routing.json"
             unInstallRouting "${vlessChainTag}" outboundTag
-            addInstallRouting "${vlessChainTag}" outboundTag "${domainList}"
+            addXrayRouting "${vlessChainTag}" outboundTag "${domainList}"
         fi
     fi
     echoContent green " ---> 规则已更新"
