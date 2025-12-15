@@ -7948,7 +7948,7 @@ addVlessChainRoute() {
             removeXrayOutbound IPv4_out; removeXrayOutbound IPv6_out; removeXrayOutbound z_direct_outbound; removeXrayOutbound blackhole_out; removeXrayOutbound socks5_outbound; removeXrayOutbound wireguard_out_IPv4; removeXrayOutbound wireguard_out_IPv6; rm ${configPath}09_routing.json >/dev/null 2>&1
         fi
         if [[ -n "${singBoxConfigPath}" ]]; then
-            removeSingBoxConfig IPv4_out; removeSingBoxConfig IPv6_out; removeSingBoxConfig wireguard_endpoints_IPv4_route; removeSingBoxConfig wireguard_endpoints_IPv6_route; removeSingBoxConfig wireguard_endpoints_IPv4; removeSingBoxConfig wireguard_endpoints_IPv6; removeSingBoxConfig IPv6_route; removeSingBoxConfig socks5_inbound_route; removeSingBoxConfig socks5_outbound_route; removeSingBoxConfig 01_direct_outbound; removeSingBoxConfig socks5_outbound
+            removeSingBoxConfig IPv4_out; removeSingBoxConfig IPv6_out; removeSingBoxConfig wireguard_endpoints_IPv4_route; removeSingBoxConfig wireguard_endpoints_IPv6_route; removeSingBoxConfig wireguard_endpoints_IPv4; removeSingBoxConfig wireguard_endpoints_IPv6; removeSingBoxConfig IPv6_route; removeSingBoxConfig socks5_02_inbound_route; removeSingBoxConfig socks5_01_outbound_route; removeSingBoxConfig 01_direct_outbound; removeSingBoxConfig socks5_outbound
         fi
     else
         if [[ -n "${singBoxConfigPath}" ]]; then
