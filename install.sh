@@ -4758,7 +4758,7 @@ EOF
         removeSingBoxConfig cn_block_outbound
         removeSingBoxConfig cn_block_route
         removeSingBoxConfig 01_direct_outbound
-        removeSingBoxConfig socks5_outbound.json
+        removeSingBoxConfig socks5_outbound
         removeSingBoxConfig block_domain_outbound
         removeSingBoxConfig dns
     fi
