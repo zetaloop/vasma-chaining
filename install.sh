@@ -6243,7 +6243,7 @@ updateV2RayAgent() {
 
     sudo chmod 700 /etc/v2ray-agent/install.sh
     local version
-    version=$(grep '当前版本：v' "/etc/v2ray-agent/install.sh" | awk -F "[v]" '{print $2}' | tail -n +2 | head -n 1 | awk -F "[\"]" '{print $1}')
+    version=$(grep -oE 'Vasma Chaining v[0-9]+\.[0-9]+\.[0-9]+' "/etc/v2ray-agent/install.sh" | awk -F "[v]" '{print $2}' | head -n 1)
 
     echoContent green "\n ---> 更新完毕"
     echoContent yellow " ---> 请手动执行[vasma]打开脚本"
