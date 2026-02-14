@@ -6527,7 +6527,7 @@ removeUser() {
 
         if [[ "${coreInstallType}" != "1" ]] && echo ${currentInstallProtocolType} | grep -q ",2,"; then
             local trojangRPCUsers
-            trojangRPCUsers=$(jq -r 'del(.inbounds[0].settings.clients['"${delUserIndex}"']//.inbounds[0].users['"${delUserIndex}"')' ${configPath}04_trojan_gRPC_inbounds.json)
+            trojangRPCUsers=$(jq -r 'del(.inbounds[0].settings.clients['"${delUserIndex}"']//.inbounds[0].users['"${delUserIndex}"'])' ${configPath}04_trojan_gRPC_inbounds.json)
             echo "${trojangRPCUsers}" | jq . >${configPath}04_trojan_gRPC_inbounds.json
         fi
 
