@@ -7640,8 +7640,8 @@ showSingBoxRoutingRules() {
             echoContent skyBlue "$(jq .outbounds[0] ${singBoxConfigPath}socks5_outbound.json)"
         elif [[ "$1" == "socks5_02_inbound_route" && -f "${singBoxConfigPath}20_socks5_inbounds.json" ]]; then
             echoContent yellow "已安装 sing-box socks5全局入站分流"
-            echoContent yellow "\n出站分流配置："
-            echoContent skyBlue "$(jq .outbounds[0] ${singBoxConfigPath}socks5_outbound.json)"
+            echoContent yellow "\n入站分流配置："
+            echoContent skyBlue "$(jq .inbounds[0] ${singBoxConfigPath}20_socks5_inbounds.json)"
         fi
     fi
 }
