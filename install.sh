@@ -8150,32 +8150,10 @@ addGlobalDirectRoute() {
     # sing-box 修改
     if [[ -n "${singBoxConfigPath}" ]]; then
         local directRouteFile="${singBoxConfigPath}00_direct_route.json"
-        echo '{"route":{"rules":[]}}' >"${directRouteFile}"
+        rm -f "${directRouteFile}"
         if [[ -n "${domainList}" ]]; then
-            local rules_json domainRules ruleSet ruleSetTag
-            rules_json=$(initSingBoxRules "${domainList}" "direct")
-            domainRules=$(echo "${rules_json}" | jq .domainRules)
-            ruleSet=$(echo "${rules_json}" | jq .ruleSet)
-            ruleSetTag=[]
-            [[ "$(echo "${ruleSet}" | jq '.|length')" != "0" ]] && ruleSetTag=$(echo "${ruleSet}" | jq '.|map(.tag)')
-            cat <<EOF >"${directRouteFile}"
-{
-  "route": {
-    "rules": [
-      {
-        "rule_set": ${ruleSetTag},
-        "domain_regex": ${domainRules},
-        "outbound": "${singboxDirectTag}"
-      }
-    ],
-    "rule_set": ${ruleSet}
-  }
-}
-EOF
-            jq 'if .route.rule_set == [] then del(.route.rule_set) else . end' "${directRouteFile}" >"${directRouteFile}_tmp" && mv "${directRouteFile}_tmp" "${directRouteFile}"
+            addSingBoxRouteRule "${singboxDirectTag}" "${domainList}" "00_direct_route"
             addSingBoxOutbound "${singboxDirectTag}"
-        else
-            rm -f "${directRouteFile}"
         fi
         echoContent green " ---> sing-box 优先直连规则已更新 (存储于 ${directRouteFile})"
     fi
@@ -8213,12 +8191,17 @@ prepareVlessChainOutbound() {
         echoContent red " ---> 链接格式错误"
         exit 0
     fi
-    local body uuid hostPort host port query security flow sni fp publicKey shortId proto
+    local body uuid hostPort host port query security flow sni fp publicKey shortId pqv transport proto k v
     body=${vlessURL#vless://}
     uuid=${body%%@*}
     hostPort=${body#*@}; hostPort=${hostPort%%\?*}
-    host=${hostPort%%:*}; port=${hostPort#*:}
-    query=${vlessURL#*?}; query=${query%%#*}
+    if [[ "${hostPort}" == \[*\]:* ]]; then
+        host=${hostPort%%]*}; host=${host#\[}
+        port=${hostPort##*:}
+    else
+        host=${hostPort%:*}; port=${hostPort##*:}
+    fi
+    query=${vlessURL#*\?}; query=${query%%#*}
     IFS='&' read -ra kv <<<"${query}"
     for pair in "${kv[@]}"; do
         k=${pair%%=*}; v=${pair#*=}
@@ -8229,16 +8212,27 @@ prepareVlessChainOutbound() {
         fp) fp=$v ;;
         publicKey|pbk) publicKey=$v ;;
         shortId|sid) shortId=$v ;;
+        pqv) pqv=$v ;;
+        type) transport=$v ;;
         esac
     done
     sni=${sni:-$host}
+    fp=${fp:-chrome}
+    if [[ -n "${transport}" && "${transport}" != "tcp" ]]; then
+        echoContent red " ---> 仅支持 TCP 传输"
+        exit 0
+    fi
     local userFlowField=""
+    local mldsa65VerifyField=""
     if [[ -n "${flow}" ]]; then
         userFlowField=", \"flow\": \"${flow}\""
     fi
+    if [[ -n "${pqv}" ]]; then
+        mldsa65VerifyField=", \"mldsa65Verify\": \"${pqv}\""
+    fi
     if [[ "${security}" == "tls" && "${flow}" == "xtls-rprx-vision" ]]; then
         proto="vision"
-    elif [[ "${security}" == "reality" ]]; then
+    elif [[ "${security}" == "reality" && -n "${publicKey}" ]]; then
         proto="reality"
     else
         echoContent red " ---> 仅支持 Vision(TLS) 或 Reality 协议"
@@ -8257,8 +8251,12 @@ prepareVlessChainOutbound() {
             "server_port": ${port},
             "uuid": "${uuid}",
             "flow": "xtls-rprx-vision",
-            "tls": {"enabled": true, "server_name": "${sni}"},
-            "transport": {"type": "tcp"}
+            "tls": {
+                "enabled": true,
+                "server_name": "${sni}",
+                "utls": {"enabled": true, "fingerprint": "${fp}"}
+            },
+            "packet_encoding": "xudp"
         }
     ]
 }
@@ -8273,16 +8271,18 @@ EOF
             "server": "${host}",
             "server_port": ${port},
             "uuid": "${uuid}",
+            "flow": "${flow}",
             "tls": {
                 "enabled": true,
                 "server_name": "${sni}",
+                "utls": {"enabled": true, "fingerprint": "${fp}"},
                 "reality": {
                     "enabled": true,
                     "public_key": "${publicKey}",
                     "short_id": "${shortId}"
                 }
             },
-            "transport": {"type": "tcp"}
+            "packet_encoding": "xudp"
         }
     ]
 }
@@ -8299,7 +8299,7 @@ EOF
             "protocol": "vless",
             "tag": "${vlessChainTag}",
             "settings": {"vnext": [{"address": "${host}", "port": ${port}, "users": [{"id": "${uuid}", "encryption": "none"${userFlowField}}]}]},
-            "streamSettings": {"network": "tcp", "security": "tls", "tlsSettings": {"serverName": "${sni}"}}
+            "streamSettings": {"network": "tcp", "security": "tls", "tlsSettings": {"serverName": "${sni}", "fingerprint": "${fp}"}}
         }
     ]
 }
@@ -8312,13 +8312,12 @@ EOF
             "protocol": "vless",
             "tag": "${vlessChainTag}",
             "settings": {"vnext": [{"address": "${host}", "port": ${port}, "users": [{"id": "${uuid}", "encryption": "none"${userFlowField}}]}]},
-            "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"serverName": "${sni}", "publicKey": "${publicKey}", "shortId": "${shortId}", "fingerprint": "${fp}"}}
+            "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"serverName": "${sni}", "password": "${publicKey}", "shortId": "${shortId}", "fingerprint": "${fp}"${mldsa65VerifyField}}}
         }
     ]
 }
 EOF
         fi
-        addXrayOutbound "${vlessChainTag}"
     fi
     echoContent green " ---> 已创建出站 ${vlessChainTag}"
 }
