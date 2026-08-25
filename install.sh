@@ -350,6 +350,10 @@ initVar() {
     # 上次安装配置状态
     lastInstallationConfig=
 
+    # 当前用户
+    routingUserConfig=/etc/v2ray-agent/user_routing.json
+    routingUser=
+
 }
 
 # 读取tls证书详情
@@ -3320,6 +3324,9 @@ addSingBoxRouteRule() {
     local domainList=$2
     # 路由文件名称
     local routingName=$3
+    if setRoutingUserRule "${outboundTag}" "${domainList}"; then
+        return
+    fi
     # 读取上次安装内容
     if [[ -f "${singBoxConfigPath}${routingName}.json" ]]; then
         read -r -p "读取到上次的配置，是否保留 ？[y/n]:" historyRouteStatus
@@ -6037,6 +6044,14 @@ addUser() {
             echo "${clients}" | jq . >${configPath}03_VLESS_WS_inbounds.json
         fi
 
+        # VLESS XHTTP
+        if echo "${currentInstallProtocolType}" | grep -q ",12,"; then
+            local clients=
+            clients=$(initXrayClients 12 "${uuid}" "${email}")
+            clients=$(jq -r ".inbounds[0].settings.clients = ${clients}" ${configPath}12_VLESS_XHTTP_inbounds.json)
+            echo "${clients}" | jq . >${configPath}12_VLESS_XHTTP_inbounds.json
+        fi
+
         # trojan grpc
         if echo "${currentInstallProtocolType}" | grep -q ",2,"; then
             local clients=
@@ -6168,6 +6183,10 @@ addUser() {
             echo "${clients}" | jq . >${configPath}13_anytls_inbounds.json
         fi
     done
+    if [[ -f "${routingUserConfig}" ]]; then
+        readConfigHostPathUUID
+        renderRoutingUsers
+    fi
     reloadCore
     echoContent green " ---> 添加完成"
     readNginxSubscribe
@@ -6209,6 +6228,12 @@ removeUser() {
             local vlessWSResult
             vlessWSResult=$(jq -r 'del(.inbounds[0].settings.clients['"${delUserIndex}"']//.inbounds[0].users['"${delUserIndex}"'])' ${configPath}03_VLESS_WS_inbounds.json)
             echo "${vlessWSResult}" | jq . >${configPath}03_VLESS_WS_inbounds.json
+        fi
+
+        if echo ${currentInstallProtocolType} | grep -q ",12,"; then
+            local vlessXHTTPResult
+            vlessXHTTPResult=$(jq -r 'del(.inbounds[0].settings.clients['"${delUserIndex}"'])' ${configPath}12_VLESS_XHTTP_inbounds.json)
+            echo "${vlessXHTTPResult}" | jq . >${configPath}12_VLESS_XHTTP_inbounds.json
         fi
 
         if echo ${currentInstallProtocolType} | grep -q ",2,"; then
@@ -6273,6 +6298,10 @@ removeUser() {
             local anyTLSResult
             anyTLSResult=$(jq -r 'del(.inbounds[0].users['"${delUserIndex}"'])' "${singBoxConfigPath}13_anytls_inbounds.json")
             echo "${anyTLSResult}" | jq . >"${singBoxConfigPath}13_anytls_inbounds.json"
+        fi
+        if [[ -f "${routingUserConfig}" ]]; then
+            readConfigHostPathUUID
+            renderRoutingUsers
         fi
         reloadCore
         readNginxSubscribe
@@ -6481,6 +6510,7 @@ ipv6Routing() {
     checkIPv6
     echoContent skyBlue "\n功能 1/${totalProgress} : IPv6分流"
     echoContent red "\n=============================================================="
+    showRoutingUser
     echoContent yellow "1.查看已分流域名"
     echoContent yellow "2.添加域名"
     echoContent yellow "3.设置IPv6全局"
@@ -6515,11 +6545,24 @@ ipv6Routing() {
 
         echoContent red "=============================================================="
         echoContent yellow "# 注意事项\n"
-        echoContent yellow "1.会删除所有设置的分流规则"
-        echoContent yellow "2.会删除IPv6之外的所有出站规则\n"
+        if [[ -n "${routingUser}" ]]; then
+            echoContent yellow "仅设置当前用户的全部流量使用IPv6出站\n"
+        else
+            echoContent yellow "1.会删除所有设置的分流规则"
+            echoContent yellow "2.会删除IPv6之外的所有出站规则\n"
+        fi
         read -r -p "是否确认设置？[y/n]:" IPv6OutStatus
 
         if [[ "${IPv6OutStatus}" == "y" ]]; then
+            if [[ -n "${routingUser}" ]]; then
+                [[ "${coreInstallType}" == "1" ]] && addXrayOutbound IPv6_out
+                [[ -n "${singBoxConfigPath}" ]] && addSingBoxOutbound IPv6_out
+                setRoutingUserRule IPv6_out ""
+                echoContent green " ---> 当前用户IPv6全局出站设置完毕"
+                reloadCore
+                return
+            fi
+            clearRoutingUserRules
             if [[ "${coreInstallType}" == "1" ]]; then
                 addXrayOutbound IPv6_out
                 removeXrayOutbound IPv4_out
@@ -6558,6 +6601,12 @@ ipv6Routing() {
         fi
 
     elif [[ "${ipv6Status}" == "4" ]]; then
+        if removeRoutingUserRule IPv6_out; then
+            echoContent green " ---> 当前用户IPv6分流卸载成功"
+            reloadCore
+            return
+        fi
+        removeRoutingUserRule IPv6_out ""
         if [[ "${coreInstallType}" == "1" ]]; then
             unInstallRouting IPv6_out outboundTag
 
@@ -6582,10 +6631,13 @@ ipv6Routing() {
 
 # ipv6分流规则展示
 showIPv6Routing() {
+    if showRoutingUserRule IPv6_out; then
+        return
+    fi
     if [[ "${coreInstallType}" == "1" ]]; then
         if [[ -f "${configPath}09_routing.json" ]]; then
             echoContent yellow "Xray-core："
-            jq -r -c '.routing.rules[]|select (.outboundTag=="IPv6_out")|.domain' ${configPath}09_routing.json | jq -r
+            jq -r -c '.routing.rules[]|select (.outboundTag=="IPv6_out" and .user==null)|.domain' ${configPath}09_routing.json | jq -r
         elif [[ ! -f "${configPath}09_routing.json" && -f "${configPath}IPv6_out.json" ]]; then
             echoContent yellow "Xray-core"
             echoContent green " ---> 已设置IPv6全局分流"
@@ -6941,6 +6993,249 @@ getDLCMatchedRuleValue() {
     fi
 }
 
+# 获取全部逻辑用户
+getRoutingUsers() {
+    echo "${currentClients:-[]}" | jq '[.[] | {id:(.id // .uuid // .password),name:((.email // .name // .username // .id // .uuid // .password) | split("-")[0])}] | unique_by(.id)'
+}
+
+# 获取用户在各协议中的完整名称
+getRoutingUserIdentities() {
+    local core=$1
+    local id=$2
+    if [[ "${core}" == "xray" ]]; then
+        for file in "${configPath}"*_inbounds.json; do
+            [[ -f "${file}" ]] || continue
+            jq -r --arg id "${id}" '.inbounds[]? | (.settings.clients // [])[]? | select((.id // .password) == $id) | (.email // .name // empty)' "${file}"
+        done | sort -u | jq -R 'select(length > 0)' | jq -s .
+    else
+        for file in "${singBoxConfigPath}"*_inbounds.json; do
+            [[ -f "${file}" ]] || continue
+            [[ "${file##*/}" == "20_socks5_inbounds.json" ]] && continue
+            jq -r --arg id "${id}" '.inbounds[]? | (.users // [])[]? | select((.uuid // .password) == $id) | (.name // .username // empty)' "${file}"
+        done | sort -u | jq -R 'select(length > 0)' | jq -s .
+    fi
+}
+
+initRoutingUserConfig() {
+    if [[ ! -f "${routingUserConfig}" ]]; then
+        echo '{"selected":null,"rules":[]}' >"${routingUserConfig}"
+        chmod 600 "${routingUserConfig}"
+    elif ! jq -e '(.selected == null or (.selected | type == "string")) and (.rules | type == "array") and (.rules | all(.[]; (.user | type == "string") and (.outbound | type == "string") and (.domains | type == "array")))' "${routingUserConfig}" >/dev/null; then
+        echoContent red " ---> 用户分流配置格式错误：${routingUserConfig}"
+        exit 0
+    fi
+}
+
+readRoutingUser() {
+    routingUser=
+    if [[ -f "${routingUserConfig}" ]]; then
+        routingUser=$(jq -r '.selected // empty' "${routingUserConfig}")
+        if [[ -n "${routingUser}" ]] && ! getRoutingUsers | jq -e --arg id "${routingUser}" '.[] | select(.id == $id)' >/dev/null; then
+            routingUser=
+            local config
+            config=$(jq '.selected = null' "${routingUserConfig}")
+            echo "${config}" | jq . >"${routingUserConfig}"
+        fi
+    fi
+}
+
+showRoutingUser() {
+    readRoutingUser
+    local name="全部用户"
+    if [[ -n "${routingUser}" ]]; then
+        name=$(getRoutingUsers | jq -r --arg id "${routingUser}" '.[] | select(.id == $id) | .name')
+    fi
+    if [[ "${1:-}" == "menu" ]]; then
+        echoContent yellow "\n当前用户：${name}"
+        echoContent yellow "u.切换用户"
+    else
+        echoContent yellow "当前用户：${name}"
+    fi
+}
+
+switchRoutingUser() {
+    readInstallType
+    local users
+    users=$(getRoutingUsers)
+    if [[ "$(echo "${users}" | jq length)" == "0" ]]; then
+        echoContent red " ---> 未找到用户"
+        return
+    fi
+    echoContent skyBlue "\n切换用户"
+    echoContent red "\n=============================================================="
+    echoContent yellow "0.全部用户"
+    echo "${users}" | jq -r 'to_entries[] | "\(.key + 1).\(.value.name)"'
+    read -r -p "请选择:" selectRoutingUser
+    if ! [[ "${selectRoutingUser}" =~ ^[0-9]+$ ]] || ((selectRoutingUser > $(echo "${users}" | jq length))); then
+        echoContent red " ---> 选择错误"
+        return
+    fi
+    initRoutingUserConfig
+    local config
+    if [[ "${selectRoutingUser}" == "0" ]]; then
+        config=$(jq '.selected = null' "${routingUserConfig}")
+    else
+        local id
+        id=$(echo "${users}" | jq -r --argjson index "$((selectRoutingUser - 1))" '.[$index].id')
+        config=$(jq --arg id "${id}" '.selected = $id' "${routingUserConfig}")
+    fi
+    echo "${config}" | jq . >"${routingUserConfig}"
+    showRoutingUser
+}
+
+getSingBoxRoutingOutbound() {
+    case $1 in
+    z_direct_outbound) echo "01_direct_outbound" ;;
+    wireguard_out_IPv4) echo "wireguard_endpoints_IPv4" ;;
+    wireguard_out_IPv6) echo "wireguard_endpoints_IPv6" ;;
+    *) echo "$1" ;;
+    esac
+}
+
+getRoutingUserOutbound() {
+    case $1 in
+    wireguard_endpoints_IPv4) echo "wireguard_out_IPv4" ;;
+    wireguard_endpoints_IPv6) echo "wireguard_out_IPv6" ;;
+    z_direct_outbound | wireguard_out_IPv4 | wireguard_out_IPv6 | IPv6_out | socks5_outbound | vless_chain_outbound | VMess-out) echo "$1" ;;
+    esac
+}
+
+renderXrayRoutingUsers() {
+    [[ "${coreInstallType}" == "1" ]] || return
+    [[ -f "${configPath}09_routing.json" ]] || echo '{"routing":{"rules":[]}}' >"${configPath}09_routing.json"
+    local rules=[]
+    local index=0 rule user outbound domains identities domainRules domain matchedRuleValue
+    while read -r rule; do
+        user=$(echo "${rule}" | jq -r .user)
+        outbound=$(echo "${rule}" | jq -r .outbound)
+        domains=$(echo "${rule}" | jq -c .domains)
+        identities=$(getRoutingUserIdentities xray "${user}")
+        [[ "$(echo "${identities}" | jq length)" == "0" ]] && continue
+        domainRules=[]
+        while read -r domain; do
+            matchedRuleValue=$(getDLCMatchedRuleValue "${domain}" "/etc/v2ray-agent/xray")
+            domainRules=$(echo "${domainRules}" | jq --arg value "${matchedRuleValue}" '. += [$value]')
+        done < <(echo "${domains}" | jq -r '.[]')
+        local routingRule
+        routingRule=$(jq -nc --argjson users "${identities}" --arg outbound "${outbound}" --arg tag "vasma-user-${index}" --argjson domains "${domainRules}" '{type:"field",user:$users,outboundTag:$outbound,ruleTag:$tag} + if ($domains|length) > 0 then {domain:$domains} else {} end')
+        rules=$(echo "${rules}" | jq --argjson rule "${routingRule}" '. += [$rule]')
+        ((index++)) || true
+    done < <(jq -c '.rules | sort_by(if (.domains | length) == 0 then 2 elif .outbound == "z_direct_outbound" then 0 else 1 end)[]' "${routingUserConfig}")
+
+    local routing
+    routing=$(jq 'del(.routing.rules[]? | select((.ruleTag // "") | startswith("vasma-user-")))' "${configPath}09_routing.json")
+    routing=$(echo "${routing}" | jq --argjson rules "${rules}" '.routing.rules = ([.routing.rules[] | select(.outboundTag == "z_direct_outbound" and (.user == null) and (.domain != null))] + $rules + [.routing.rules[] | select((.outboundTag == "z_direct_outbound" and (.user == null) and (.domain != null)) | not)])')
+    echo "${routing}" | jq . >"${configPath}09_routing.json"
+}
+
+renderSingBoxRoutingUsers() {
+    [[ -n "${singBoxConfigPath}" ]] || return
+    local rules=[]
+    local ruleSets=[]
+    local rule user outbound domains identities parsed domainRules ruleSet ruleSetTags routingRule
+    while read -r rule; do
+        user=$(echo "${rule}" | jq -r .user)
+        outbound=$(getSingBoxRoutingOutbound "$(echo "${rule}" | jq -r .outbound)")
+        domains=$(echo "${rule}" | jq -r '.domains | join(",")')
+        identities=$(getRoutingUserIdentities sing-box "${user}")
+        [[ "$(echo "${identities}" | jq length)" == "0" ]] && continue
+        parsed=$(initSingBoxRules "${domains}" "user_route")
+        domainRules=$(echo "${parsed}" | jq .domainRules)
+        ruleSet=$(echo "${parsed}" | jq .ruleSet)
+        ruleSetTags=$(echo "${ruleSet}" | jq '[.[].tag]')
+        routingRule=$(jq -nc --argjson users "${identities}" --arg outbound "${outbound}" --argjson domains "${domainRules}" --argjson ruleSets "${ruleSetTags}" '{auth_user:$users,action:"route",outbound:$outbound} + if ($domains|length) > 0 then {domain_regex:$domains} else {} end + if ($ruleSets|length) > 0 then {rule_set:$ruleSets} else {} end')
+        rules=$(echo "${rules}" | jq --argjson rule "${routingRule}" '. += [$rule]')
+        ruleSets=$(echo "${ruleSets}" | jq --argjson values "${ruleSet}" '. += $values | unique_by(.tag)')
+    done < <(jq -c '.rules | sort_by(if (.domains | length) == 0 then 2 elif .outbound == "z_direct_outbound" then 0 else 1 end)[]' "${routingUserConfig}")
+
+    if [[ "$(echo "${rules}" | jq length)" == "0" ]]; then
+        rm -f "${singBoxConfigPath}01_user_route.json"
+    else
+        jq -nc --argjson rules "${rules}" --argjson ruleSets "${ruleSets}" '{route:{rules:$rules}} + if ($ruleSets|length) > 0 then {route:{rules:$rules,rule_set:$ruleSets}} else {} end' >"${singBoxConfigPath}01_user_route.json"
+    fi
+}
+
+renderRoutingUsers() {
+    initRoutingUserConfig
+    local users config
+    users=$(getRoutingUsers | jq '[.[].id]')
+    config=$(jq --argjson users "${users}" '.rules |= map(select(.user as $user | $users | index($user))) | .selected as $selected | if $selected != null and ($users | index($selected) | not) then .selected = null else . end' "${routingUserConfig}")
+    echo "${config}" | jq . >"${routingUserConfig}"
+    renderXrayRoutingUsers
+    renderSingBoxRoutingUsers
+}
+
+setRoutingUserRule() {
+    local outbound
+    outbound=$(getRoutingUserOutbound "$1")
+    local domainList=$2
+    readRoutingUser
+    [[ -n "${routingUser}" && -n "${outbound}" ]] || return 1
+    initRoutingUserConfig
+    local domains
+    domains=$(echo "${domainList}" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' | sort -u | jq -R . | jq -s .)
+    local config
+    if [[ "$(echo "${domains}" | jq length)" == "0" ]]; then
+        config=$(jq --arg user "${routingUser}" --arg outbound "${outbound}" --argjson domains "${domains}" '.rules |= map(select((.user == $user and (.domains | length) == 0) | not)) | .rules += [{user:$user,outbound:$outbound,domains:$domains}]' "${routingUserConfig}")
+    else
+        config=$(jq --arg user "${routingUser}" --arg outbound "${outbound}" --argjson domains "${domains}" '.rules |= map(if .user == $user and (.domains | length) > 0 then (.domains -= $domains | select((.domains | length) > 0)) else . end) | .rules |= map(select((.user == $user and .outbound == $outbound and (.domains | length) > 0) | not)) | .rules += [{user:$user,outbound:$outbound,domains:$domains}]' "${routingUserConfig}")
+    fi
+    echo "${config}" | jq . >"${routingUserConfig}"
+    renderRoutingUsers
+    return 0
+}
+
+removeRoutingUserRule() {
+    local outbound=$1
+    local user
+    if [[ $# -gt 1 ]]; then
+        user=$2
+    else
+        readRoutingUser
+        user=${routingUser}
+        [[ -n "${user}" ]] || return 1
+    fi
+    [[ -f "${routingUserConfig}" ]] || return
+    initRoutingUserConfig
+    local config
+    if [[ -n "${user}" ]]; then
+        config=$(jq --arg user "${user}" --arg outbound "${outbound}" '.rules |= map(select((.user == $user and .outbound == $outbound) | not))' "${routingUserConfig}")
+    else
+        config=$(jq --arg outbound "${outbound}" '.rules |= map(select(.outbound != $outbound))' "${routingUserConfig}")
+    fi
+    echo "${config}" | jq . >"${routingUserConfig}"
+    renderRoutingUsers
+    return 0
+}
+
+clearRoutingUserRules() {
+    if [[ ! -f "${routingUserConfig}" ]]; then
+        [[ -n "${singBoxConfigPath}" ]] && rm -f "${singBoxConfigPath}01_user_route.json"
+        return
+    fi
+    initRoutingUserConfig
+    local config
+    config=$(jq '.rules = []' "${routingUserConfig}")
+    echo "${config}" | jq . >"${routingUserConfig}"
+    [[ -n "${singBoxConfigPath}" ]] && rm -f "${singBoxConfigPath}01_user_route.json"
+}
+
+showRoutingUserRule() {
+    local outbound=$1
+    readRoutingUser
+    if [[ -z "${routingUser}" ]]; then
+        return 1
+    fi
+    initRoutingUserConfig
+    local rules
+    rules=$(jq -r --arg user "${routingUser}" --arg outbound "${outbound}" '.rules[] | select(.user == $user and .outbound == $outbound) | if (.domains | length) == 0 then "全部流量" else (.domains | join(",")) end' "${routingUserConfig}")
+    if [[ -n "${rules}" ]]; then
+        echo "${rules}"
+    else
+        echoContent yellow " ---> 当前用户未设置此分流"
+    fi
+}
+
 # 添加routing配置
 addXrayRouting() {
 
@@ -6952,6 +7247,9 @@ addXrayRouting() {
     if [[ -z "${tag}" || -z "${type}" || -z "${domain}" ]]; then
         echoContent red " ---> 参数错误"
         exit 0
+    fi
+    if setRoutingUserRule "${tag}" "${domain}"; then
+        return
     fi
 
     local routingRule=
@@ -6973,7 +7271,7 @@ addXrayRouting() {
 EOF
     fi
     local routingRule=
-    routingRule=$(jq -r ".routing.rules[]|select(.outboundTag==\"${tag}\" and (.protocol == null))" ${configPath}09_routing.json)
+    routingRule=$(jq -r ".routing.rules[]|select(.outboundTag==\"${tag}\" and (.protocol == null) and (.user == null))" ${configPath}09_routing.json)
 
     if [[ -z "${routingRule}" ]]; then
         routingRule="{\"type\": \"field\",\"domain\": [],\"outboundTag\": \"${tag}\"}"
@@ -7135,7 +7433,7 @@ unInstallRouting() {
             routing=$(jq -r "del(.routing.rules[] | select(.${type} == \"${tag}\" and (.protocol | index(\"${protocol}\"))))" ${configPath}09_routing.json)
             echo "${routing}" | jq . >${configPath}09_routing.json
         else
-            routing=$(jq -r "del(.routing.rules[] | select(.${type} == \"${tag}\" and (.protocol == null )))" ${configPath}09_routing.json)
+            routing=$(jq -r "del(.routing.rules[] | select(.${type} == \"${tag}\" and (.protocol == null) and (.user == null)))" ${configPath}09_routing.json)
             echo "${routing}" | jq . >${configPath}09_routing.json
         fi
     fi
@@ -7206,11 +7504,14 @@ installWarpReg() {
 # 展示warp分流域名
 showWireGuardDomain() {
     local type=$1
+    if showRoutingUserRule "wireguard_out_${type}"; then
+        return
+    fi
     # xray
     if [[ "${coreInstallType}" == "1" ]]; then
         if [[ -f "${configPath}09_routing.json" ]]; then
             echoContent yellow "Xray-core"
-            jq -r -c '.routing.rules[]|select (.outboundTag=="wireguard_out_'"${type}"'")|.domain' ${configPath}09_routing.json | jq -r
+            jq -r -c '.routing.rules[]|select (.outboundTag=="wireguard_out_'"${type}"'" and .user==null)|.domain' ${configPath}09_routing.json | jq -r
         elif [[ ! -f "${configPath}09_routing.json" && -f "${configPath}wireguard_out_${type}.json" ]]; then
             echoContent yellow "Xray-core"
             echoContent green " ---> 已设置warp ${type}全局分流"
@@ -7308,6 +7609,7 @@ warpRoutingReg() {
     local type=$2
     echoContent skyBlue "\n进度  $1/${totalProgress} : WARP分流[第三方]"
     echoContent red "=============================================================="
+    showRoutingUser
 
     echoContent yellow "1.查看已分流域名"
     echoContent yellow "2.添加域名"
@@ -7342,12 +7644,25 @@ warpRoutingReg() {
 
         echoContent red "=============================================================="
         echoContent yellow "# 注意事项\n"
-        echoContent yellow "1.会删除所有设置的分流规则"
-        echoContent yellow "2.会删除除WARP[第三方]之外的所有出站规则\n"
+        if [[ -n "${routingUser}" ]]; then
+            echoContent yellow "仅设置当前用户的全部流量使用WARP ${type}出站\n"
+        else
+            echoContent yellow "1.会删除所有设置的分流规则"
+            echoContent yellow "2.会删除除WARP[第三方]之外的所有出站规则\n"
+        fi
         read -r -p "是否确认设置？[y/n]:" warpOutStatus
 
         if [[ "${warpOutStatus}" == "y" ]]; then
             readConfigWarpReg
+            if [[ -n "${routingUser}" ]]; then
+                [[ "${coreInstallType}" == "1" ]] && addXrayOutbound "wireguard_out_${type}"
+                [[ -n "${singBoxConfigPath}" ]] && addSingBoxWireGuardEndpoints "${type}"
+                setRoutingUserRule "wireguard_out_${type}" ""
+                echoContent green " ---> 当前用户WARP ${type}全局出站设置完毕"
+                reloadCore
+                return
+            fi
+            clearRoutingUserRules
             if [[ "${coreInstallType}" == "1" ]]; then
                 addXrayOutbound "wireguard_out_${type}"
                 if [[ "${type}" == "IPv4" ]]; then
@@ -7398,6 +7713,12 @@ warpRoutingReg() {
         fi
 
     elif [[ "${warpStatus}" == "4" ]]; then
+        if removeRoutingUserRule "wireguard_out_${type}"; then
+            echoContent green " ---> 当前用户WARP ${type}分流已卸载"
+            reloadCore
+            return
+        fi
+        removeRoutingUserRule "wireguard_out_${type}" ""
         if [[ "${coreInstallType}" == "1" ]]; then
             unInstallRouting "wireguard_out_${type}" outboundTag
 
@@ -7425,6 +7746,7 @@ warpRoutingReg() {
 routingToolsMenu() {
     echoContent skyBlue "\n功能 1/${totalProgress} : 分流工具"
     echoContent red "\n=============================================================="
+    showRoutingUser
     echoContent yellow "# 注意事项"
     echoContent yellow "# 用于服务端的流量分流，可用于解锁ChatGPT、流媒体等相关内容\n"
 
@@ -7579,6 +7901,7 @@ socks5InboundRoutingMenu() {
 socks5OutboundRoutingMenu() {
     echoContent skyBlue "\n功能 1/1 : Socks5出站"
     echoContent red "\n=============================================================="
+    showRoutingUser
 
     echoContent yellow "1.安装Socks5出站"
     echoContent yellow "2.设置Socks5全局转发"
@@ -7599,8 +7922,10 @@ socks5OutboundRoutingMenu() {
         socks5OutboundRoutingMenu
         ;;
     3)
-        showSingBoxRoutingRules socks5_01_outbound_route
-        showXrayRoutingRules socks5_outbound
+        if ! showRoutingUserRule socks5_outbound; then
+            showSingBoxRoutingRules socks5_01_outbound_route
+            showXrayRoutingRules socks5_outbound
+        fi
         socks5OutboundRoutingMenu
         ;;
     4)
@@ -7615,13 +7940,24 @@ socks5OutboundRoutingMenu() {
 # socks5全局
 setSocks5OutboundRoutingAll() {
 
+    readRoutingUser
     echoContent red "=============================================================="
     echoContent yellow "# 注意事项\n"
-    echoContent yellow "1.会删除所有已经设置的分流规则，包括其他分流（warp、IPv6等）"
-    echoContent yellow "2.会删除Socks5之外的所有出站规则\n"
+    if [[ -n "${routingUser}" ]]; then
+        echoContent yellow "仅设置当前用户的全部流量使用Socks5出站\n"
+    else
+        echoContent yellow "1.会删除所有已经设置的分流规则，包括其他分流（warp、IPv6等）"
+        echoContent yellow "2.会删除Socks5之外的所有出站规则\n"
+    fi
     read -r -p "是否确认设置？[y/n]:" socksOutStatus
 
     if [[ "${socksOutStatus}" == "y" ]]; then
+        if [[ -n "${routingUser}" ]]; then
+            setRoutingUserRule socks5_outbound ""
+            echoContent green " ---> 当前用户Socks5全局出站设置完毕"
+            return
+        fi
+        clearRoutingUserRules
         if [[ "${coreInstallType}" == "1" ]]; then
             removeXrayOutbound IPv4_out
             removeXrayOutbound IPv6_out
@@ -7670,7 +8006,7 @@ showSingBoxRoutingRules() {
 showXrayRoutingRules() {
     if [[ "${coreInstallType}" == "1" ]]; then
         if [[ -f "${configPath}09_routing.json" ]]; then
-            jq ".routing.rules[]|select(.outboundTag==\"$1\")" "${configPath}09_routing.json"
+            jq ".routing.rules[]|select(.outboundTag==\"$1\" and .user==null)" "${configPath}09_routing.json"
 
             echoContent yellow "\n已安装 xray-core socks5全局出站分流"
             echoContent yellow "\n出站分流配置："
@@ -7686,6 +8022,11 @@ showXrayRoutingRules() {
 
 # 卸载Socks5分流
 removeSocks5Routing() {
+    if removeRoutingUserRule socks5_outbound; then
+        echoContent green " ---> 当前用户Socks5分流已卸载"
+        reloadCore
+        return
+    fi
     echoContent skyBlue "\n功能 1/1 : 卸载Socks5分流"
     echoContent red "\n=============================================================="
 
@@ -7694,6 +8035,7 @@ removeSocks5Routing() {
     echoContent yellow "3.卸载全部"
     read -r -p "请选择:" unInstallSocks5RoutingStatus
     if [[ "${unInstallSocks5RoutingStatus}" == "1" ]]; then
+        removeRoutingUserRule socks5_outbound ""
         if [[ "${coreInstallType}" == "1" ]]; then
             removeXrayOutbound socks5_outbound
             unInstallRouting socks5_outbound outboundTag
@@ -8007,7 +8349,7 @@ EOF
 # socks5 outbound routing规则
 setSocks5OutboundRouting() {
 
-    if [[ "$1" == "addRules" && ! -f "${singBoxConfigPath}socks5_01_outbound_route.json" && ! -f "${configPath}09_routing.json" ]]; then
+    if [[ "$1" == "addRules" && ! -f "${singBoxConfigPath}socks5_outbound.json" && ! -f "${configPath}socks5_outbound.json" ]]; then
         echoContent red " ---> 请安装出站分流后再添加分流规则"
         exit 0
     fi
@@ -8023,6 +8365,11 @@ setSocks5OutboundRouting() {
     if [[ -z "${socks5RoutingOutboundDomain}" ]]; then
         echoContent red " ---> IP不可为空"
         exit 0
+    fi
+    readRoutingUser
+    if [[ -n "${routingUser}" ]]; then
+        setRoutingUserRule socks5_outbound "${socks5RoutingOutboundDomain}"
+        return
     fi
     addSingBoxRouteRule "socks5_outbound" "${socks5RoutingOutboundDomain}" "socks5_01_outbound_route"
     addSingBoxOutbound "01_direct_outbound"
@@ -8061,9 +8408,14 @@ vlessChainTag="vless_chain_outbound"
 vlessChainRoutingMenu() {
     echoContent skyBlue "\n功能 1/1 : VLESS 链式分流 (Vision / Reality)"
     echoContent red "\n=============================================================="
+    showRoutingUser
     echoContent yellow "1.查看已分流域名"
     echoContent yellow "2.设定分流域名"
-    echoContent yellow "3.设为全局转发"
+    if [[ -n "${routingUser}" ]]; then
+        echoContent yellow "3.设为当前用户全局转发"
+    else
+        echoContent yellow "3.设为全局转发"
+    fi
     echoContent yellow "4.卸载链式分流"
     read -r -p "请选择:" selectType
     case ${selectType} in
@@ -8096,10 +8448,14 @@ addGlobalDirectRoute() {
     local directTag="z_direct_outbound"
     local singboxDirectTag="01_direct_outbound"
     local directRouteFileSingbox="${singBoxConfigPath}00_direct_route.json"
+    readRoutingUser
 
     # 当前域名 (Xray)
-    if [[ "${coreInstallType}" == "1" && -f "${configPath}09_routing.json" ]]; then
-        currentDomains=$(jq -r '.routing.rules[]|select(.outboundTag=="'"${directTag}"'" and .domain!=null and (.domain|map(startswith("geosite:") or startswith("domain:"))|all))|.domain[]' "${configPath}09_routing.json" | sed -E 's/^(domain:|geosite:)//g' | paste -sd "," -)
+    if [[ -n "${routingUser}" ]]; then
+        initRoutingUserConfig
+        currentDomains=$(jq -r --arg user "${routingUser}" --arg outbound "${directTag}" '[.rules[] | select(.user == $user and .outbound == $outbound) | .domains[]] | unique | join(",")' "${routingUserConfig}")
+    elif [[ "${coreInstallType}" == "1" && -f "${configPath}09_routing.json" ]]; then
+        currentDomains=$(jq -r '.routing.rules[]|select(.outboundTag=="'"${directTag}"'" and .user==null and .domain!=null)|.domain[]' "${configPath}09_routing.json" | sed -E 's/^(domain:|geosite:|regexp:)//;s/^\.\*//;s/\.\*$//;s/\\\././g' | paste -sd "," -)
     elif [[ -n "${singBoxConfigPath}" && -f "${directRouteFileSingbox}" ]]; then
         local rs dr
         rs=$(jq -r '.route.rules[]|select(.outbound=="'"${singboxDirectTag}"'")|.rule_set[]?' "${directRouteFileSingbox}" | cut -d '_' -f 1)
@@ -8121,11 +8477,23 @@ addGlobalDirectRoute() {
         fi
     fi
 
+    if [[ -n "${routingUser}" ]]; then
+        if [[ -n "${domainList}" ]]; then
+            [[ "${coreInstallType}" == "1" ]] && addXrayOutbound "${directTag}"
+            [[ -n "${singBoxConfigPath}" ]] && addSingBoxOutbound "${singboxDirectTag}"
+            setRoutingUserRule "${directTag}" "${domainList}"
+        else
+            removeRoutingUserRule "${directTag}"
+        fi
+        echoContent green " ---> 当前用户优先直连规则已更新"
+        return
+    fi
+
     # Xray 修改
     if [[ "${coreInstallType}" == "1" ]]; then
         [[ ! -f "${configPath}09_routing.json" ]] && echo '{"routing":{"rules":[]}}' >"${configPath}09_routing.json"
         local tmp
-        tmp=$(jq 'del(.routing.rules[]| select(.outboundTag=="'"${directTag}"'" and .domain!=null and (.domain|map(startswith("geosite:") or startswith("domain:"))|all)))' "${configPath}09_routing.json")
+        tmp=$(jq 'del(.routing.rules[]| select(.outboundTag=="'"${directTag}"'" and .user==null and .domain!=null))' "${configPath}09_routing.json")
         echo "${tmp}" | jq . >"${configPath}09_routing.json"
         if [[ -n "${domainList}" ]]; then
             local direct_rule='{"type":"field","outboundTag":"'"${directTag}"'","domain":[]}'
@@ -8186,9 +8554,12 @@ addGlobalDirectRoute() {
 # 查看已分流域名
 showVlessChainDomain() {
     echoContent skyBlue "\n--- VLESS 链式分流域名 ---"
+    if showRoutingUserRule "${vlessChainTag}"; then
+        return
+    fi
     if [[ "${coreInstallType}" == "1" && -f "${configPath}09_routing.json" ]]; then
         echoContent yellow "Xray-core:"
-        jq -r -c ".routing.rules[]|select(.outboundTag==\"${vlessChainTag}\")|.domain" "${configPath}09_routing.json" | jq -r
+        jq -r -c ".routing.rules[]|select(.outboundTag==\"${vlessChainTag}\" and .user==null)|.domain" "${configPath}09_routing.json" | jq -r
     fi
     if [[ -n "${singBoxConfigPath}" && -f "${singBoxConfigPath}${vlessChainTag}_route.json" ]]; then
         echoContent yellow "sing-box:"
@@ -8349,10 +8720,14 @@ EOF
 addVlessChainRoute() {
     local mode=$1
     local domainList=""
+    readRoutingUser
     if [[ "${mode}" != "global" ]]; then
         local currentDomains=""
-        if [[ -f "${configPath}09_routing.json" ]]; then
-            currentDomains=$(jq -r '.routing.rules[]|select(.outboundTag=="'"${vlessChainTag}"'")|.domain[]' "${configPath}09_routing.json" | sed -E 's/^(domain:|geosite:)//g' | paste -sd "," -)
+        if [[ -n "${routingUser}" ]]; then
+            initRoutingUserConfig
+            currentDomains=$(jq -r --arg user "${routingUser}" --arg outbound "${vlessChainTag}" '[.rules[] | select(.user == $user and .outbound == $outbound) | .domains[]] | unique | join(",")' "${routingUserConfig}")
+        elif [[ -f "${configPath}09_routing.json" ]]; then
+            currentDomains=$(jq -r '.routing.rules[]|select(.outboundTag=="'"${vlessChainTag}"'" and .user==null and .domain!=null)|.domain[]' "${configPath}09_routing.json" | sed -E 's/^(domain:|geosite:)//g' | paste -sd "," -)
         elif [[ -f "${singBoxConfigPath}${vlessChainTag}_route.json" ]]; then
             local rs dr
             rs=$(jq -r '.route.rules[]|.rule_set[]?' "${singBoxConfigPath}${vlessChainTag}_route.json" | cut -d '_' -f 1)
@@ -8367,7 +8742,14 @@ addVlessChainRoute() {
             exit 0
         fi
     fi
+    if [[ -n "${routingUser}" && "${mode}" == "global" ]]; then
+        setRoutingUserRule "${vlessChainTag}" "${domainList}"
+        [[ -n "${singBoxConfigPath}" ]] && addSingBoxOutbound "01_direct_outbound"
+        echoContent green " ---> 当前用户规则已更新"
+        return
+    fi
     if [[ "${mode}" == "global" ]]; then
+        clearRoutingUserRules
         if [[ "${coreInstallType}" == "1" ]]; then
             removeXrayOutbound IPv4_out; removeXrayOutbound IPv6_out; removeXrayOutbound z_direct_outbound; removeXrayOutbound blackhole_out; removeXrayOutbound socks5_outbound; removeXrayOutbound wireguard_out_IPv4; removeXrayOutbound wireguard_out_IPv6; rm ${configPath}09_routing.json >/dev/null 2>&1
         fi
@@ -8390,6 +8772,11 @@ addVlessChainRoute() {
 
 # 卸载链式分流
 removeVlessChainRoute() {
+    if removeRoutingUserRule "${vlessChainTag}"; then
+        echoContent green " ---> 当前用户链式分流已卸载"
+        return
+    fi
+    removeRoutingUserRule "${vlessChainTag}" ""
     if [[ "${coreInstallType}" == "1" ]]; then
         removeXrayOutbound "${vlessChainTag}"
         unInstallRouting "${vlessChainTag}" outboundTag
@@ -8451,6 +8838,12 @@ setVMessWSRoutingOutbounds() {
 
 # 移除VMess+WS+TLS分流
 removeVMessWSRouting() {
+    if removeRoutingUserRule VMess-out; then
+        reloadCore
+        echoContent green " ---> 当前用户VMess分流卸载成功"
+        return
+    fi
+    removeRoutingUserRule VMess-out ""
 
     removeXrayOutbound VMess-out
     unInstallRouting VMess-out outboundTag
@@ -10393,6 +10786,7 @@ menu() {
     echoContent red "\n=============================================================="
     echoContent green "Vasma Chaining v3.5.22\c"
     showInstallStatus
+    showRoutingUser menu
     checkWgetShowProgress
     echoContent red "\n=============================================================="
     if [[ -n "${coreInstallType}" ]]; then
@@ -10427,6 +10821,10 @@ menu() {
     aliasInstall
     read -r -p "请选择:" selectInstallType
     case ${selectInstallType} in
+    u)
+        switchRoutingUser
+        menu
+        ;;
     1)
         selectCoreInstall
         ;;
