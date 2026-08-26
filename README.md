@@ -14,6 +14,8 @@
 
 运行以下指令安装，脚本安装在 `/etc/v2ray-agent/install.sh`，输入 `vasma` 运行脚本。
 
+也可以依次传入菜单编号快速执行，例如 `vasma 17` 更新脚本、`vasma 16 1 7` 更新 Xray geosite、geoip 资源、`vasma 11 1 1` 查看 WARP IPv4 分流。
+
 ```
 wget -P /root -N --no-check-certificate "https://raw.githubusercontent.com/zetaloop/vasma-chaining/master/install.sh" && chmod 700 /root/install.sh && /root/install.sh
 ```
