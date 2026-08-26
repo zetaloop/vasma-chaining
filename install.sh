@@ -10885,4 +10885,21 @@ menu() {
     esac
 }
 cronFunction
+if (($#)); then
+    for shortcutChoice; do
+        if [[ ! "${shortcutChoice}" =~ ^([0-9]+|u)$ ]]; then
+            echoContent red " ---> 快捷菜单参数仅支持数字或u"
+            exit 1
+        fi
+    done
+    menuChoices=("$@")
+    read() {
+        if ((${#menuChoices[@]})) && [[ " $* " == *" -p "* ]]; then
+            builtin read "$@" <<<"${menuChoices[0]}"
+            menuChoices=("${menuChoices[@]:1}")
+            return
+        fi
+        builtin read "$@"
+    }
+fi
 menu
