@@ -6798,26 +6798,46 @@ checkIPv6() {
     fi
 }
 
+# IP分流
+ipRoutingMenu() {
+    echoContent skyBlue "\n功能 1/${totalProgress} : IP分流"
+    echoContent red "\n=============================================================="
+    echoContent yellow "1.IPv4"
+    echoContent yellow "2.IPv6"
+    echoContent red "=============================================================="
+    read -r -p "请选择:" ipType
+    case ${ipType} in
+    1) ipv6Routing IPv4 ;;
+    2) ipv6Routing IPv6 ;;
+    *) echoContent red " ---> 选择错误" ;;
+    esac
+}
+
 # ipv6 分流
 ipv6Routing() {
+    local type=${1:-IPv6}
+    local otherType=IPv6
+    [[ "${type}" == "IPv6" ]] && otherType=IPv4
+    local tag="${type}_out"
+    local route="${type}_route"
     if [[ -z "${configPath}" ]]; then
         echoContent red " ---> 未安装，请使用脚本安装"
         menu
         exit 0
     fi
 
-    checkIPv6
-    echoContent skyBlue "\n功能 1/${totalProgress} : IPv6分流"
+    [[ "${type}" == "IPv6" ]] && checkIPv6
+    echoContent skyBlue "\n功能 1/${totalProgress} : ${type}分流"
     echoContent red "\n=============================================================="
     showRoutingUser
     echoContent yellow "1.查看已分流域名"
     echoContent yellow "2.添加域名"
-    echoContent yellow "3.设置IPv6全局"
-    echoContent yellow "4.卸载IPv6分流"
+    echoContent yellow "3.设置${type}全局"
+    echoContent yellow "4.卸载${type}分流"
     echoContent red "=============================================================="
     read -r -p "请选择:" ipv6Status
     if [[ "${ipv6Status}" == "1" ]]; then
-        showIPv6Routing
+        showIPv6Routing "${type}"
         exit 0
     elif [[ "${ipv6Status}" == "2" ]]; then
         echoContent red "=============================================================="
@@ -6827,15 +6847,15 @@ ipv6Routing() {
 
         read -r -p "请按照上面示例录入域名:" domainList
         if [[ "${coreInstallType}" == "1" ]]; then
-            addXrayRouting IPv6_out outboundTag "${domainList}"
-            addXrayOutbound IPv6_out
+            addXrayRouting "${tag}" outboundTag "${domainList}"
+            addXrayOutbound "${tag}"
         fi
 
         if [[ -n "${singBoxConfigPath}" ]]; then
-            addSingBoxRouteRule "IPv6_out" "${domainList}" "IPv6_route"
+            addSingBoxRouteRule "${tag}" "${domainList}" "${route}"
             addSingBoxOutbound 01_direct_outbound
-            addSingBoxOutbound IPv6_out
-            addSingBoxOutbound IPv4_out
+            addSingBoxOutbound "${tag}"
+            addSingBoxOutbound "${otherType}_out"
         fi
 
         echoContent green " ---> 添加完毕"
@@ -6845,26 +6865,26 @@ ipv6Routing() {
         echoContent red "=============================================================="
         echoContent yellow "# 注意事项\n"
         if [[ -n "${routingUser}" ]]; then
-            echoContent yellow "仅设置当前用户的全部流量使用IPv6出站\n"
+            echoContent yellow "仅设置当前用户的全部流量使用${type}出站\n"
         else
             echoContent yellow "1.会删除所有设置的分流规则"
-            echoContent yellow "2.会删除IPv6之外的所有出站规则\n"
+            echoContent yellow "2.会删除${type}之外的所有出站规则\n"
         fi
         read -r -p "是否确认设置？[y/n]:" IPv6OutStatus
 
         if [[ "${IPv6OutStatus}" == "y" ]]; then
             if [[ -n "${routingUser}" ]]; then
-                [[ "${coreInstallType}" == "1" ]] && addXrayOutbound IPv6_out
-                [[ -n "${singBoxConfigPath}" ]] && addSingBoxOutbound IPv6_out
-                setRoutingUserRule IPv6_out ""
-                echoContent green " ---> 当前用户IPv6全局出站设置完毕"
+                [[ "${coreInstallType}" == "1" ]] && addXrayOutbound "${tag}"
+                [[ -n "${singBoxConfigPath}" ]] && addSingBoxOutbound "${tag}"
+                setRoutingUserRule "${tag}" ""
+                echoContent green " ---> 当前用户${type}全局出站设置完毕"
                 reloadCore
                 return
             fi
             clearRoutingUserRules
             if [[ "${coreInstallType}" == "1" ]]; then
-                addXrayOutbound IPv6_out
-                removeXrayOutbound IPv4_out
+                addXrayOutbound "${tag}"
+                removeXrayOutbound "${otherType}_out"
                 removeXrayOutbound z_direct_outbound
                 removeXrayOutbound blackhole_out
                 removeXrayOutbound wireguard_out_IPv4
@@ -6875,7 +6895,7 @@ ipv6Routing() {
             fi
             if [[ -n "${singBoxConfigPath}" ]]; then
 
-                removeSingBoxConfig IPv4_out
+                removeSingBoxConfig "${otherType}_out"
 
                 removeSingBoxConfig wireguard_endpoints_IPv4_route
                 removeSingBoxConfig wireguard_endpoints_IPv6_route
@@ -6884,15 +6904,16 @@ ipv6Routing() {
 
                 removeSingBoxConfig socks5_02_inbound_route
 
+                removeSingBoxConfig IPv4_route
                 removeSingBoxConfig IPv6_route
 
                 removeSingBoxConfig 01_direct_outbound
 
-                addSingBoxOutbound IPv6_out
+                addSingBoxOutbound "${tag}"
 
             fi
 
-            echoContent green " ---> IPv6全局出站设置完毕"
+            echoContent green " ---> ${type}全局出站设置完毕"
         else
 
             echoContent green " ---> 放弃设置"
@@ -6900,26 +6921,26 @@ ipv6Routing() {
         fi
 
     elif [[ "${ipv6Status}" == "4" ]]; then
-        if removeRoutingUserRule IPv6_out; then
-            echoContent green " ---> 当前用户IPv6分流卸载成功"
+        if removeRoutingUserRule "${tag}"; then
+            echoContent green " ---> 当前用户${type}分流卸载成功"
             reloadCore
             return
         fi
-        removeRoutingUserRule IPv6_out ""
+        removeRoutingUserRule "${tag}" ""
         if [[ "${coreInstallType}" == "1" ]]; then
-            unInstallRouting IPv6_out outboundTag
+            unInstallRouting "${tag}" outboundTag
 
-            removeXrayOutbound IPv6_out
+            removeXrayOutbound "${tag}"
             addXrayOutbound "z_direct_outbound"
         fi
 
         if [[ -n "${singBoxConfigPath}" ]]; then
-            removeSingBoxConfig IPv6_out
-            removeSingBoxConfig "IPv6_route"
+            removeSingBoxConfig "${tag}"
+            removeSingBoxConfig "${route}"
             addSingBoxOutbound "01_direct_outbound"
         fi
 
-        echoContent green " ---> IPv6分流卸载成功"
+        echoContent green " ---> ${type}分流卸载成功"
     else
         echoContent red " ---> 选择错误"
         exit 0
@@ -6930,30 +6951,33 @@ ipv6Routing() {
 
 # ipv6分流规则展示
 showIPv6Routing() {
-    if showRoutingUserRule IPv6_out; then
+    local type=${1:-IPv6}
+    local tag="${type}_out"
+    local route="${type}_route"
+    if showRoutingUserRule "${tag}"; then
         return
     fi
     if [[ "${coreInstallType}" == "1" ]]; then
         if [[ -f "${configPath}09_routing.json" ]]; then
             echoContent yellow "Xray-core："
-            jq -r -c '.routing.rules[]|select (.outboundTag=="IPv6_out" and .user==null)|.domain' ${configPath}09_routing.json | jq -r
-        elif [[ ! -f "${configPath}09_routing.json" && -f "${configPath}IPv6_out.json" ]]; then
+            jq -r -c '.routing.rules[]|select (.outboundTag=="'"${tag}"'" and .user==null)|.domain' ${configPath}09_routing.json | jq -r
+        elif [[ ! -f "${configPath}09_routing.json" && -f "${configPath}${tag}.json" ]]; then
             echoContent yellow "Xray-core"
-            echoContent green " ---> 已设置IPv6全局分流"
+            echoContent green " ---> 已设置${type}全局分流"
         else
-            echoContent yellow " ---> 未安装IPv6分流"
+            echoContent yellow " ---> 未安装${type}分流"
         fi
 
     fi
     if [[ -n "${singBoxConfigPath}" ]]; then
-        if [[ -f "${singBoxConfigPath}IPv6_route.json" ]]; then
+        if [[ -f "${singBoxConfigPath}${route}.json" ]]; then
             echoContent yellow "sing-box"
-            jq -r -c '.route.rules[]|select (.outbound=="IPv6_out")' "${singBoxConfigPath}IPv6_route.json" | jq -r
-        elif [[ ! -f "${singBoxConfigPath}IPv6_route.json" && -f "${singBoxConfigPath}IPv6_out.json" ]]; then
+            jq -r -c '.route.rules[]|select (.outbound=="'"${tag}"'")' "${singBoxConfigPath}${route}.json" | jq -r
+        elif [[ ! -f "${singBoxConfigPath}${route}.json" && -f "${singBoxConfigPath}${tag}.json" ]]; then
             echoContent yellow "sing-box"
-            echoContent green " ---> 已设置IPv6全局分流"
+            echoContent green " ---> 已设置${type}全局分流"
         else
-            echoContent yellow " ---> 未安装IPv6分流"
+            echoContent yellow " ---> 未安装${type}分流"
         fi
     fi
 }
@@ -7395,7 +7419,7 @@ getRoutingUserOutbound() {
     case $1 in
     wireguard_endpoints_IPv4) echo "wireguard_out_IPv4" ;;
     wireguard_endpoints_IPv6) echo "wireguard_out_IPv6" ;;
-    z_direct_outbound | wireguard_out_IPv4 | wireguard_out_IPv6 | IPv6_out | socks5_outbound | vless_chain_outbound | VMess-out) echo "$1" ;;
+    z_direct_outbound | wireguard_out_IPv4 | wireguard_out_IPv6 | IPv4_out | IPv6_out | socks5_outbound | vless_chain_outbound | VMess-out) echo "$1" ;;
     esac
 }
 
@@ -8051,7 +8075,7 @@ routingToolsMenu() {
 
     echoContent yellow "1.WARP分流【第三方 IPv4】"
     echoContent yellow "2.WARP分流【第三方 IPv6】"
-    echoContent yellow "3.IPv6分流"
+    echoContent yellow "3.IP分流"
     echoContent yellow "4.Socks5分流【替换任意门分流】"
     echoContent yellow "5.DNS分流"
     #    echoContent yellow "6.VMess+WS+TLS分流"
@@ -8069,7 +8093,7 @@ routingToolsMenu() {
         warpRoutingReg 1 IPv6
         ;;
     3)
-        ipv6Routing 1
+        ipRoutingMenu
         ;;
     4)
         socks5Routing
