@@ -6483,6 +6483,7 @@ addUser() {
         readConfigHostPathUUID
         renderRoutingUsers
     fi
+    reloadCore
     echoContent green " ---> 添加完成"
     readNginxSubscribe
     if [[ -n "${subscribePort}" ]]; then
@@ -6516,94 +6517,105 @@ removeUser() {
     elif [[ "${coreInstallType}" == "2" ]]; then
         jq -r -c .inbounds[0].users[].name//.inbounds[0].users[].username ${configPath}${frontingType:-$frontingTypeReality}.json | awk '{print NR""":"$0}'
         read -r -p "请选择要删除的用户编号[仅支持单个删除]:" delUserIndex
-        if [[ $(jq -r '.inbounds[0].users|length' ${configPath}${frontingType:-$frontingTypeReality}.json) -lt ${delUserIndex} ]]; then
+        if [[ ! "${delUserIndex}" =~ ^[0-9]+$ ]] || [[ "${delUserIndex}" -lt 1 ]] || [[ $(jq -r '.inbounds[0].users|length' ${configPath}${frontingType:-$frontingTypeReality}.json) -lt ${delUserIndex} ]]; then
             echoContent red " ---> 选择错误"
             return 1
         else
             delUserIndex=$((delUserIndex - 1))
+            uuid=$(jq -r --argjson index "${delUserIndex}" '.inbounds[0].users[$index].uuid // .inbounds[0].users[$index].password // empty' "${configPath}${frontingType:-$frontingTypeReality}.json")
         fi
     fi
 
     if [[ -n "${delUserIndex}" ]]; then
 
+        if [[ "${coreInstallType}" == "1" ]]; then
+            local file clients
+            for file in "${configPath}"*_inbounds.json; do
+                [[ -f "${file}" ]] || continue
+                clients=$(jq --arg uuid "${uuid}" 'del(.inbounds[].settings.clients[]? | select((.id // .password) == $uuid))' "${file}") || return 1
+                echo "${clients}" | jq . >"${file}"
+            done
+        fi
+
         if [[ "${coreInstallType}" != "1" ]] && echo ${currentInstallProtocolType} | grep -q ",0,"; then
             local vlessVision
-            vlessVision=$(jq -r 'del(.inbounds[0].settings.clients['"${delUserIndex}"']//.inbounds[0].users['"${delUserIndex}"'])' ${configPath}02_VLESS_TCP_inbounds.json)
+            vlessVision=$(jq --arg uuid "${uuid}" 'del(.inbounds[0].users[]? | select((.uuid // .password) == $uuid))' ${configPath}02_VLESS_TCP_inbounds.json)
             echo "${vlessVision}" | jq . >${configPath}02_VLESS_TCP_inbounds.json
         fi
         if [[ "${coreInstallType}" != "1" ]] && echo ${currentInstallProtocolType} | grep -q ",1,"; then
             local vlessWSResult
-            vlessWSResult=$(jq -r 'del(.inbounds[0].settings.clients['"${delUserIndex}"']//.inbounds[0].users['"${delUserIndex}"'])' ${configPath}03_VLESS_WS_inbounds.json)
+            vlessWSResult=$(jq --arg uuid "${uuid}" 'del(.inbounds[0].users[]? | select((.uuid // .password) == $uuid))' ${configPath}03_VLESS_WS_inbounds.json)
             echo "${vlessWSResult}" | jq . >${configPath}03_VLESS_WS_inbounds.json
         fi
 
         if [[ "${coreInstallType}" != "1" ]] && echo ${currentInstallProtocolType} | grep -q ",2,"; then
             local trojangRPCUsers
-            trojangRPCUsers=$(jq -r 'del(.inbounds[0].settings.clients['"${delUserIndex}"']//.inbounds[0].users['"${delUserIndex}"'])' ${configPath}04_trojan_gRPC_inbounds.json)
+            trojangRPCUsers=$(jq --arg uuid "${uuid}" 'del(.inbounds[0].users[]? | select((.uuid // .password) == $uuid))' ${configPath}04_trojan_gRPC_inbounds.json)
             echo "${trojangRPCUsers}" | jq . >${configPath}04_trojan_gRPC_inbounds.json
         fi
 
         if [[ "${coreInstallType}" != "1" ]] && echo ${currentInstallProtocolType} | grep -q ",3,"; then
             local vmessWSResult
-            vmessWSResult=$(jq -r 'del(.inbounds[0].settings.clients['"${delUserIndex}"']//.inbounds[0].users['"${delUserIndex}"'])' ${configPath}05_VMess_WS_inbounds.json)
+            vmessWSResult=$(jq --arg uuid "${uuid}" 'del(.inbounds[0].users[]? | select((.uuid // .password) == $uuid))' ${configPath}05_VMess_WS_inbounds.json)
             echo "${vmessWSResult}" | jq . >${configPath}05_VMess_WS_inbounds.json
         fi
 
         if [[ "${coreInstallType}" != "1" ]] && echo ${currentInstallProtocolType} | grep -q ",5,"; then
             local vlessGRPCResult
-            vlessGRPCResult=$(jq -r 'del(.inbounds[0].settings.clients['"${delUserIndex}"']//.inbounds[0].users['"${delUserIndex}"'])' ${configPath}06_VLESS_gRPC_inbounds.json)
+            vlessGRPCResult=$(jq --arg uuid "${uuid}" 'del(.inbounds[0].users[]? | select((.uuid // .password) == $uuid))' ${configPath}06_VLESS_gRPC_inbounds.json)
             echo "${vlessGRPCResult}" | jq . >${configPath}06_VLESS_gRPC_inbounds.json
         fi
 
         if [[ "${coreInstallType}" != "1" ]] && echo ${currentInstallProtocolType} | grep -q ",4,"; then
             local trojanTCPResult
-            trojanTCPResult=$(jq -r 'del(.inbounds[0].settings.clients['"${delUserIndex}"']//.inbounds[0].users['"${delUserIndex}"'])' ${configPath}04_trojan_TCP_inbounds.json)
+            trojanTCPResult=$(jq --arg uuid "${uuid}" 'del(.inbounds[0].users[]? | select((.uuid // .password) == $uuid))' ${configPath}04_trojan_TCP_inbounds.json)
             echo "${trojanTCPResult}" | jq . >${configPath}04_trojan_TCP_inbounds.json
         fi
 
         if echo ${currentInstallProtocolType} | grep -q ",6,"; then
             local hysteriaResult
-            hysteriaResult=$(jq -r 'del(.inbounds[0].users['"${delUserIndex}"'])' "${singBoxConfigPath}06_hysteria2_inbounds.json")
+            hysteriaResult=$(jq --arg uuid "${uuid}" 'del(.inbounds[0].users[]? | select((.uuid // .password) == $uuid))' "${singBoxConfigPath}06_hysteria2_inbounds.json")
             echo "${hysteriaResult}" | jq . >"${singBoxConfigPath}06_hysteria2_inbounds.json"
         fi
         if [[ "${coreInstallType}" != "1" ]] && echo ${currentInstallProtocolType} | grep -q ",7,"; then
             local vlessRealityResult
-            vlessRealityResult=$(jq -r 'del(.inbounds[1].settings.clients['"${delUserIndex}"']//.inbounds[0].users['"${delUserIndex}"'])' ${configPath}07_VLESS_vision_reality_inbounds.json)
+            vlessRealityResult=$(jq --arg uuid "${uuid}" 'del(.inbounds[0].users[]? | select((.uuid // .password) == $uuid))' ${configPath}07_VLESS_vision_reality_inbounds.json)
             echo "${vlessRealityResult}" | jq . >${configPath}07_VLESS_vision_reality_inbounds.json
         fi
         if [[ "${coreInstallType}" != "1" ]] && echo ${currentInstallProtocolType} | grep -q ",8,"; then
             local vlessRealityGRPCResult
-            vlessRealityGRPCResult=$(jq -r 'del(.inbounds[0].settings.clients['"${delUserIndex}"']//.inbounds[0].users['"${delUserIndex}"'])' ${configPath}08_VLESS_vision_gRPC_inbounds.json)
+            vlessRealityGRPCResult=$(jq --arg uuid "${uuid}" 'del(.inbounds[0].users[]? | select((.uuid // .password) == $uuid))' ${configPath}08_VLESS_vision_gRPC_inbounds.json)
             echo "${vlessRealityGRPCResult}" | jq . >${configPath}08_VLESS_vision_gRPC_inbounds.json
         fi
 
         if echo ${currentInstallProtocolType} | grep -q ",9,"; then
             local tuicResult
-            tuicResult=$(jq -r 'del(.inbounds[0].users['"${delUserIndex}"'])' "${singBoxConfigPath}09_tuic_inbounds.json")
+            tuicResult=$(jq --arg uuid "${uuid}" 'del(.inbounds[0].users[]? | select((.uuid // .password) == $uuid))' "${singBoxConfigPath}09_tuic_inbounds.json")
             echo "${tuicResult}" | jq . >"${singBoxConfigPath}09_tuic_inbounds.json"
         fi
         if echo ${currentInstallProtocolType} | grep -q ",10,"; then
             local naiveResult
-            naiveResult=$(jq -r 'del(.inbounds[0].users['"${delUserIndex}"'])' "${singBoxConfigPath}10_naive_inbounds.json")
+            naiveResult=$(jq --arg uuid "${uuid}" 'del(.inbounds[0].users[]? | select((.uuid // .password) == $uuid))' "${singBoxConfigPath}10_naive_inbounds.json")
             echo "${naiveResult}" | jq . >"${singBoxConfigPath}10_naive_inbounds.json"
         fi
         # VMess HTTPUpgrade
         if [[ "${coreInstallType}" != "1" ]] && echo ${currentInstallProtocolType} | grep -q ",11,"; then
             local vmessHTTPUpgradeResult
-            vmessHTTPUpgradeResult=$(jq -r 'del(.inbounds[0].users['"${delUserIndex}"'])' "${singBoxConfigPath}11_VMess_HTTPUpgrade_inbounds.json")
+            vmessHTTPUpgradeResult=$(jq --arg uuid "${uuid}" 'del(.inbounds[0].users[]? | select((.uuid // .password) == $uuid))' "${singBoxConfigPath}11_VMess_HTTPUpgrade_inbounds.json")
             echo "${vmessHTTPUpgradeResult}" | jq . >"${singBoxConfigPath}11_VMess_HTTPUpgrade_inbounds.json"
             echo "${vmessHTTPUpgradeResult}" | jq . >${configPath}11_VMess_HTTPUpgrade_inbounds.json
         fi
         # AnyTLS
         if echo ${currentInstallProtocolType} | grep -q ",13,"; then
             local anyTLSResult
-            anyTLSResult=$(jq -r 'del(.inbounds[0].users['"${delUserIndex}"'])' "${singBoxConfigPath}13_anytls_inbounds.json")
+            anyTLSResult=$(jq --arg uuid "${uuid}" 'del(.inbounds[0].users[]? | select((.uuid // .password) == $uuid))' "${singBoxConfigPath}13_anytls_inbounds.json")
             echo "${anyTLSResult}" | jq . >"${singBoxConfigPath}13_anytls_inbounds.json"
         fi
         if [[ -f "${routingUserConfig}" ]]; then
             readConfigHostPathUUID
             renderRoutingUsers
         fi
+        reloadCore
         readNginxSubscribe
         if [[ -n "${subscribePort}" ]]; then
             subscribe false
