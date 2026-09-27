@@ -384,15 +384,13 @@ buildXrayXHTTPTLSConfig() {
     jq -n --arg domain "${domainName}" --arg path "/${customPath#\/}xHTTP" \
         --argjson clients "${clientsJson}" --argjson publicPort "${port}" '
       {inbounds:[
-        {listen:"127.0.0.1",port:45988,protocol:"vless",tag:"VLESSXHTTPTLS",
+        {listen:"0.0.0.0",port:$publicPort,protocol:"vless",tag:"VLESSXHTTPTLS",
          settings:{clients:$clients,decryption:"none"},
          streamSettings:{network:"xhttp",security:"tls",
            tlsSettings:{serverName:$domain,minVersion:"1.2",rejectUnknownSni:true,
              certificates:[{certificateFile:("/etc/v2ray-agent/tls/"+$domain+".crt"),keyFile:("/etc/v2ray-agent/tls/"+$domain+".key")}]},
-           xhttpSettings:{host:$domain,path:$path,mode:"auto"}}},
-        {listen:"0.0.0.0",port:$publicPort,protocol:"dokodemo-door",tag:"dokodemo-in-VLESSXHTTPTLS",
-         settings:{address:"127.0.0.1",port:45988,network:"tcp"},streamSettings:{network:"tcp",security:"none"}}
-      ],routing:{rules:[{type:"field",inboundTag:["dokodemo-in-VLESSXHTTPTLS"],outboundTag:"z_direct_outbound"}]}}'
+           xhttpSettings:{host:$domain,path:$path,mode:"auto"}}}
+      ]}'
 }
 
 buildVLESSXHTTPTLSURI() {
@@ -637,7 +635,7 @@ readInstallProtocolType() {
 
         if echo "${row}" | grep -q 14_VLESS_XHTTP_TLS_inbounds; then
             currentInstallProtocolType="${currentInstallProtocolType}14,"
-            xrayVLESSXHTTPTLSPort=$(jq -r '.inbounds[1].port' "${row}.json")
+            xrayVLESSXHTTPTLSPort=$(jq -r '.inbounds[0].port' "${row}.json")
             xrayVLESSXHTTPTLSServerName=$(jq -r '.inbounds[0].streamSettings.tlsSettings.serverName' "${row}.json")
             [[ -z "${xrayVLESSXHTTPTLSServerName}" || "${xrayVLESSXHTTPTLSServerName}" == null ]] && xrayVLESSXHTTPTLSServerName=$(jq -r '.inbounds[0].streamSettings.xhttpSettings.host' "${row}.json")
         fi
@@ -1045,10 +1043,15 @@ readConfigHostPathUUID() {
             local xhttpTLSConfig="${configPath}14_VLESS_XHTTP_TLS_inbounds.json"
             currentClients=$(jq -c '.inbounds[0].settings.clients' "${xhttpTLSConfig}")
             currentUUID=$(jq -r '.inbounds[0].settings.clients[0].id // empty' "${xhttpTLSConfig}")
-            currentHost=$(jq -r '.inbounds[0].streamSettings.tlsSettings.serverName // .inbounds[0].streamSettings.xhttpSettings.host // empty' "${xhttpTLSConfig}")
-            currentPort=$(jq -r '.inbounds[1].port' "${xhttpTLSConfig}")
-            xrayVLESSXHTTPTLSPort=${currentPort}
-            currentPath=$(jq -r '.inbounds[0].streamSettings.xhttpSettings.path' "${xhttpTLSConfig}" | sed -E 's#^/##; s#xHTTP$##')
+            xrayVLESSXHTTPTLSServerName=$(jq -r '.inbounds[0].streamSettings.tlsSettings.serverName // .inbounds[0].streamSettings.xhttpSettings.host // empty' "${xhttpTLSConfig}")
+            xrayVLESSXHTTPTLSPort=$(jq -r '.inbounds[0].port' "${xhttpTLSConfig}")
+            if [[ -z "${frontingType}" ]]; then
+                currentHost=${xrayVLESSXHTTPTLSServerName}
+                currentPort=${xrayVLESSXHTTPTLSPort}
+                if [[ -z "${currentPath}" ]]; then
+                    currentPath=$(jq -r '.inbounds[0].streamSettings.xhttpSettings.path' "${xhttpTLSConfig}" | sed -E 's#^/##; s#xHTTP$##')
+                fi
+            fi
         fi
     elif [[ "${coreInstallType}" == "2" ]]; then
         if [[ -n "${frontingType}" ]]; then
@@ -4273,7 +4276,7 @@ EOF
     fi
     # VLESS XHTTP TLS (Xray only, without Nginx)
     if echo "${selectCustomInstallType}" | grep -q ",14," || [[ "$1" == "all" ]]; then
-        initXrayXHTTPTLSPort
+        initXrayXHTTPTLSPort || return 1
 
         buildXrayXHTTPTLSConfig "${xHTTPTLSPort}" "${domain}" "${customPath}" "$(initXrayClients 14)" | jq . >"${configPath}14_VLESS_XHTTP_TLS_inbounds.json"
     elif [[ -z "$3" ]]; then
@@ -5017,6 +5020,7 @@ defaultBase64Code() {
     local user=
     user=$(echo "${email}" | awk -F "[-]" '{print $1}')
     if [[ "${type}" == "vlessXHTTPTLS" ]]; then
+        local currentHost=${xrayVLESSXHTTPTLSServerName}
         local xhttpTLSURI
         xhttpTLSURI=$(buildVLESSXHTTPTLSURI "${add}" "${port}" "${id}" "${currentHost}" "${path}" "${currentXHTTPMode:-auto}" "${email}")
         echoContent yellow " ---> Generic format (VLESS+XHTTP+TLS)"
@@ -5780,6 +5784,8 @@ showAccounts() {
     if echo ${currentInstallProtocolType} | grep -q ",14," && [[ -f "${configPath}14_VLESS_XHTTP_TLS_inbounds.json" ]]; then
         echoContent skyBlue "\n================================ VLESS XHTTP TLS  ================================\n"
         local xhttpTLSCDNAddress=
+        local xhttpTLSPath
+        xhttpTLSPath=$(jq -r '.inbounds[0].streamSettings.xhttpSettings.path' "${configPath}14_VLESS_XHTTP_TLS_inbounds.json")
         if [[ -f "/etc/v2ray-agent/cdn" ]]; then
             xhttpTLSCDNAddress=$(head -1 "/etc/v2ray-agent/cdn" | tr -d '\r\n')
         fi
@@ -5795,7 +5801,7 @@ showAccounts() {
                 xhttpTLSUsedNames="${xhttpTLSUsedNames}${nodeName}"$'\n'
                 echoContent skyBlue "\n ---> Account :${nodeName}"
                 currentXHTTPMode=${endpointMode}
-                defaultBase64Code vlessXHTTPTLS "${endpointPort}" "${nodeName}" "${uuidValue}" "${endpointAddress}" "${currentPath}xHTTP"
+                defaultBase64Code vlessXHTTPTLS "${endpointPort}" "${nodeName}" "${uuidValue}" "${endpointAddress}" "${xhttpTLSPath}"
                 endpointIndex=$((endpointIndex + 1))
             done < <(listXHTTPTLSEndpoints "$(getPublicIP)" "${xrayVLESSXHTTPTLSPort}" "${xhttpTLSCDNAddress}")
         done < <(jq -c '.inbounds[0].settings.clients[]?' "${configPath}14_VLESS_XHTTP_TLS_inbounds.json")
@@ -6147,7 +6153,7 @@ manageCDN() {
     echoContent skyBlue "\n Progress $1/1 : CDN Node management "
     local setCDNDomain=
 
-    if echo "${currentInstallProtocolType}" | grep -qE ",1,|,2,|,3,|,5,|,11,"; then
+    if echo "${currentInstallProtocolType}" | grep -qE ",1,|,2,|,3,|,5,|,11,|,12,|,14,"; then
         echoContent red "=============================================================="
         echoContent yellow "# Notes"
         echoContent yellow "\n Guide URL :"
@@ -6197,7 +6203,7 @@ manageCDN() {
     else
         echoContent yellow "\n Guide URL :"
         echoContent skyBlue "https://www.v2ray-agent.com/archives/cloudflarezi-xuan-ip\n"
-        echoContent red " ---> No usable protocol detected , Only supports ws、grpc、HTTPUpgrade related protocols "
+        echoContent red " ---> No usable protocol detected , Only supports ws、grpc、HTTPUpgrade、XHTTP related protocols "
     fi
 }
 # Custom uuid
@@ -8780,7 +8786,7 @@ installXrayReality() {
     # 安装Xray
     installXray 2 false
     installXrayService 3
-    initXrayConfig custom 4
+    initXrayConfig custom 4 || return 1
     cleanUp singBoxDel
 
     handleXray stop
@@ -8875,7 +8881,7 @@ customXrayInstall() {
         # Install Xray
         installXray 7 false
         installXrayService 8
-        initXrayConfig custom 9
+        initXrayConfig custom 9 || return 1
         cleanUp singBoxDel
         if xraySelectionNeedsNginx "${selectCustomInstallType}"; then
             installCronTLS 10
@@ -8952,7 +8958,7 @@ xrayCoreInstall() {
     # Install Xray
     installXray 6 false
     installXrayService 7
-    initXrayConfig all 8
+    initXrayConfig all 8 || return 1
     cleanUp singBoxDel
     installCronTLS 9
     if [[ -n "${btDomain}" ]]; then
@@ -10165,7 +10171,7 @@ manageReality() {
 
     if [[ "${coreInstallType}" == "1" ]]; then
         selectCustomInstallType=",7,"
-        initXrayConfig custom 1 true
+        initXrayConfig custom 1 true || return 1
     elif [[ "${coreInstallType}" == "2" ]]; then
         if echo "${currentInstallProtocolType}" | grep -q ",7,"; then
             selectCustomInstallType=",7,"
