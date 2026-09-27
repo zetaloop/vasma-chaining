@@ -6905,6 +6905,7 @@ ipv6Routing() {
                 addXrayOutbound "${tag}"
                 removeXrayOutbound "${otherType}_out"
                 removeXrayOutbound z_direct_outbound
+                removeXrayOutbound "${vlessChainTag}"
                 removeXrayOutbound blackhole_out
                 removeXrayOutbound wireguard_out_IPv4
                 removeXrayOutbound wireguard_out_IPv6
@@ -6922,11 +6923,16 @@ ipv6Routing() {
                 removeSingBoxConfig wireguard_endpoints_IPv6
 
                 removeSingBoxConfig socks5_02_inbound_route
+                removeSingBoxConfig socks5_01_outbound_route
+                removeSingBoxConfig socks5_outbound
 
                 removeSingBoxConfig IPv4_route
                 removeSingBoxConfig IPv6_route
 
                 removeSingBoxConfig 01_direct_outbound
+                removeSingBoxConfig "${vlessChainTag}"
+                removeSingBoxConfig "${vlessChainTag}_route"
+                removeSingBoxConfig 00_direct_route
 
                 addSingBoxOutbound "${tag}"
 
@@ -7885,7 +7891,9 @@ addWireGuardRoute() {
     # xray
     if [[ "${coreInstallType}" == "1" ]]; then
 
-        addXrayRouting "wireguard_out_${type}" "${tag}" "${domainList}"
+        if [[ -n "${domainList}" ]]; then
+            addXrayRouting "wireguard_out_${type}" "${tag}" "${domainList}"
+        fi
         addXrayOutbound "wireguard_out_${type}"
     fi
     # sing-box
@@ -8016,6 +8024,7 @@ warpRoutingReg() {
                 removeXrayOutbound IPv4_out
                 removeXrayOutbound IPv6_out
                 removeXrayOutbound z_direct_outbound
+                removeXrayOutbound "${vlessChainTag}"
                 removeXrayOutbound blackhole_out
                 removeXrayOutbound socks5_outbound
 
@@ -8027,6 +8036,9 @@ warpRoutingReg() {
                 removeSingBoxConfig IPv4_out
                 removeSingBoxConfig IPv6_out
                 removeSingBoxConfig 01_direct_outbound
+                removeSingBoxConfig "${vlessChainTag}"
+                removeSingBoxConfig "${vlessChainTag}_route"
+                removeSingBoxConfig 00_direct_route
 
                 # 删除所有分流规则
                 removeSingBoxConfig wireguard_endpoints_IPv4_route
@@ -8035,6 +8047,8 @@ warpRoutingReg() {
                 removeSingBoxConfig IPv4_route
                 removeSingBoxConfig IPv6_route
                 removeSingBoxConfig socks5_02_inbound_route
+                removeSingBoxConfig socks5_01_outbound_route
+                removeSingBoxConfig socks5_outbound
 
                 addSingBoxWireGuardEndpoints "${type}"
                 addWireGuardRoute "${type}" outboundTag ""
@@ -8305,6 +8319,7 @@ setSocks5OutboundRoutingAll() {
             removeXrayOutbound IPv4_out
             removeXrayOutbound IPv6_out
             removeXrayOutbound z_direct_outbound
+            removeXrayOutbound "${vlessChainTag}"
             removeXrayOutbound blackhole_out
             removeXrayOutbound wireguard_out_IPv4
             removeXrayOutbound wireguard_out_IPv6
@@ -8316,6 +8331,7 @@ setSocks5OutboundRoutingAll() {
             removeSingBoxConfig IPv4_out
             removeSingBoxConfig IPv6_out
             removeSingBoxConfig IPv4_route
+            removeSingBoxConfig IPv6_route
 
             removeSingBoxConfig wireguard_endpoints_IPv4_route
             removeSingBoxConfig wireguard_endpoints_IPv6_route
@@ -8323,7 +8339,11 @@ setSocks5OutboundRoutingAll() {
             removeSingBoxConfig wireguard_endpoints_IPv6
 
             removeSingBoxConfig socks5_01_outbound_route
+            removeSingBoxConfig socks5_02_inbound_route
             removeSingBoxConfig 01_direct_outbound
+            removeSingBoxConfig "${vlessChainTag}"
+            removeSingBoxConfig "${vlessChainTag}_route"
+            removeSingBoxConfig 00_direct_route
         fi
 
         echoContent green " ---> Socks5全局出站设置完毕"
@@ -8495,6 +8515,7 @@ initSingBoxRules() {
     while read -r line; do
         local normalizedLine=
         normalizedLine=$(echo "${line}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        [[ -z "${normalizedLine}" ]] && continue
         if isDomainFormat "${normalizedLine}"; then
             local escapedDomain=
             escapedDomain=${normalizedLine//./\\.}
@@ -8841,7 +8862,7 @@ addGlobalDirectRoute() {
             if [[ -f "${configPath}${vlessChainTag}.json" ]] && ! jq -e '.routing.rules[]? | select(.outboundTag=="'"${vlessChainTag}"'")' "${configPath}09_routing.json" >/dev/null; then
                 fallbackTag="${vlessChainTag}"
             else
-                for candidate in wireguard_out_IPv4 wireguard_out_IPv6 IPv6_out socks5_outbound; do
+                for candidate in wireguard_out_IPv4 wireguard_out_IPv6 IPv4_out IPv6_out socks5_outbound; do
                     if [[ -f "${configPath}${candidate}.json" ]] && ! jq -e '.routing.rules[]? | select(.outboundTag=="'"${candidate}"'")' "${configPath}09_routing.json" >/dev/null; then
                         fallbackTag="${candidate}"
                         break
@@ -8861,10 +8882,19 @@ addGlobalDirectRoute() {
     # sing-box 修改
     if [[ -n "${singBoxConfigPath}" ]]; then
         local directRouteFile="${singBoxConfigPath}00_direct_route.json"
+        singBoxMergeConfig || return 1
+        local defaultOutbound
+        defaultOutbound=$(jq -r '.route.final // .outbounds[0].tag // empty' "${singBoxConfigPath}../config.json")
         rm -f "${directRouteFile}"
         if [[ -n "${domainList}" ]]; then
             addSingBoxRouteRule "${singboxDirectTag}" "${domainList}" "00_direct_route"
             addSingBoxOutbound "${singboxDirectTag}"
+        fi
+        if [[ -n "${defaultOutbound}" && "${defaultOutbound}" != "${singboxDirectTag}" ]]; then
+            [[ -f "${directRouteFile}" ]] || echo '{"route":{"rules":[]}}' >"${directRouteFile}"
+            local routing
+            routing=$(jq --arg outbound "${defaultOutbound}" '.route.final = $outbound' "${directRouteFile}")
+            echo "${routing}" | jq . >"${directRouteFile}"
         fi
         echoContent green " ---> sing-box 优先直连规则已更新 (存储于 ${directRouteFile})"
     fi
@@ -9074,7 +9104,7 @@ addVlessChainRoute() {
             removeXrayOutbound IPv4_out; removeXrayOutbound IPv6_out; removeXrayOutbound z_direct_outbound; removeXrayOutbound blackhole_out; removeXrayOutbound socks5_outbound; removeXrayOutbound wireguard_out_IPv4; removeXrayOutbound wireguard_out_IPv6; rm ${configPath}09_routing.json >/dev/null 2>&1
         fi
         if [[ -n "${singBoxConfigPath}" ]]; then
-            removeSingBoxConfig IPv4_out; removeSingBoxConfig IPv6_out; removeSingBoxConfig wireguard_endpoints_IPv4_route; removeSingBoxConfig wireguard_endpoints_IPv6_route; removeSingBoxConfig wireguard_endpoints_IPv4; removeSingBoxConfig wireguard_endpoints_IPv6; removeSingBoxConfig IPv4_route; removeSingBoxConfig IPv6_route; removeSingBoxConfig socks5_02_inbound_route; removeSingBoxConfig socks5_01_outbound_route; removeSingBoxConfig 20_socks5_inbounds; removeSingBoxConfig 01_direct_outbound; removeSingBoxConfig socks5_outbound
+            removeSingBoxConfig IPv4_out; removeSingBoxConfig IPv6_out; removeSingBoxConfig wireguard_endpoints_IPv4_route; removeSingBoxConfig wireguard_endpoints_IPv6_route; removeSingBoxConfig wireguard_endpoints_IPv4; removeSingBoxConfig wireguard_endpoints_IPv6; removeSingBoxConfig IPv4_route; removeSingBoxConfig IPv6_route; removeSingBoxConfig socks5_02_inbound_route; removeSingBoxConfig socks5_01_outbound_route; removeSingBoxConfig 20_socks5_inbounds; removeSingBoxConfig 00_direct_route; removeSingBoxConfig 01_direct_outbound; removeSingBoxConfig socks5_outbound
         fi
     else
         if [[ -n "${singBoxConfigPath}" ]]; then

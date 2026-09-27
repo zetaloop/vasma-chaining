@@ -6857,6 +6857,8 @@ ipv6Routing() {
                 removeSingBoxConfig wireguard_endpoints_IPv6
 
                 removeSingBoxConfig socks5_02_inbound_route
+                removeSingBoxConfig socks5_01_outbound_route
+                removeSingBoxConfig socks5_outbound
 
                 removeSingBoxConfig IPv6_route
 
@@ -7558,7 +7560,9 @@ addWireGuardRoute() {
     # xray
     if [[ "${coreInstallType}" == "1" ]]; then
 
-        addXrayRouting "wireguard_out_${type}" "${tag}" "${domainList}"
+        if [[ -n "${domainList}" ]]; then
+            addXrayRouting "wireguard_out_${type}" "${tag}" "${domainList}"
+        fi
         addXrayOutbound "wireguard_out_${type}"
     fi
     # sing-box
@@ -7693,6 +7697,8 @@ warpRoutingReg() {
 
                 removeSingBoxConfig IPv6_route
                 removeSingBoxConfig socks5_02_inbound_route
+                removeSingBoxConfig socks5_01_outbound_route
+                removeSingBoxConfig socks5_outbound
 
                 addSingBoxWireGuardEndpoints "${type}"
                 addWireGuardRoute "${type}" outboundTag ""
@@ -7950,6 +7956,7 @@ setSocks5OutboundRoutingAll() {
             removeSingBoxConfig wireguard_endpoints_IPv6
 
             removeSingBoxConfig socks5_01_outbound_route
+            removeSingBoxConfig socks5_02_inbound_route
             removeSingBoxConfig 01_direct_outbound
         fi
 
@@ -8116,6 +8123,7 @@ initSingBoxRules() {
     while read -r line; do
         local normalizedLine=
         normalizedLine=$(echo "${line}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        [[ -z "${normalizedLine}" ]] && continue
         if isDomainFormat "${normalizedLine}"; then
             local escapedDomain=
             escapedDomain=${normalizedLine//./\\.}
