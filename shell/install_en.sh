@@ -2289,7 +2289,7 @@ nginxBlog() {
         fi
 
         if [[ "${nginxBlogInstallStatus}" == "y" ]]; then
-            rm -rf "${nginxStaticPath}*"
+            rm -rf "${nginxStaticPath}"*
             #  randomNum=$((RANDOM % 6 + 1))
             randomNum=$(randomNum 1 9)
             if [[ "${release}" == "alpine" ]]; then
@@ -2299,13 +2299,13 @@ nginxBlog() {
             fi
 
             unzip -o "${nginxStaticPath}html${randomNum}.zip" -d "${nginxStaticPath}" >/dev/null
-            rm -f "${nginxStaticPath}html${randomNum}.zip*"
+            rm -f "${nginxStaticPath}html${randomNum}.zip"*
             echoContent green " ---> Added fake site successfully"
         fi
     else
         randomNum=$(randomNum 1 9)
         #        randomNum=$((RANDOM % 6 + 1))
-        rm -rf "${nginxStaticPath}*"
+        rm -rf "${nginxStaticPath}"*
 
         if [[ "${release}" == "alpine" ]]; then
             wget -q -P "${nginxStaticPath}" "https://raw.githubusercontent.com/mack-a/v2ray-agent/master/fodder/blog/unable/html${randomNum}.zip"
@@ -2314,7 +2314,7 @@ nginxBlog() {
         fi
 
         unzip -o "${nginxStaticPath}html${randomNum}.zip" -d "${nginxStaticPath}" >/dev/null
-        rm -f "${nginxStaticPath}html${randomNum}.zip*"
+        rm -f "${nginxStaticPath}html${randomNum}.zip"*
         echoContent green " ---> Added fake site successfully"
     fi
 
@@ -5945,7 +5945,7 @@ updateNginxBlog() {
         fi
     fi
     if [[ "${selectInstallNginxBlogType}" =~ ^[1-9]$ ]]; then
-        rm -rf "${nginxStaticPath}*"
+        rm -rf "${nginxStaticPath}"*
 
         if [[ "${release}" == "alpine" ]]; then
             wget -q -P "${nginxStaticPath}" "https://raw.githubusercontent.com/mack-a/v2ray-agent/master/fodder/blog/unable/html${selectInstallNginxBlogType}.zip"
@@ -5954,7 +5954,7 @@ updateNginxBlog() {
         fi
 
         unzip -o "${nginxStaticPath}html${selectInstallNginxBlogType}.zip" -d "${nginxStaticPath}" >/dev/null
-        rm -f "${nginxStaticPath}html${selectInstallNginxBlogType}.zip*"
+        rm -f "${nginxStaticPath}html${selectInstallNginxBlogType}.zip"*
         echoContent green " ---> Pseudo site replaced successfully"
     else
         echoContent red " ---> Wrong selection, please select again"
