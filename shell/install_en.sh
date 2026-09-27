@@ -3653,8 +3653,10 @@ addXrayOutbound() {
     "outbounds":[
         {
             "protocol":"freedom",
-            "settings":{
-                "domainStrategy":"${domainStrategy}"
+            "streamSettings": {
+                "sockopt": {
+                    "domainStrategy":"${domainStrategy}"
+                }
             },
             "tag":"${tag}"
         }
@@ -3669,8 +3671,10 @@ EOF
     "outbounds":[
         {
             "protocol":"freedom",
-            "settings": {
-                "domainStrategy":"UseIP"
+            "streamSettings": {
+                "sockopt": {
+                    "domainStrategy":"UseIP"
+                }
             },
             "tag":"${tag}"
         }
