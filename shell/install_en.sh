@@ -2942,16 +2942,48 @@ handleSingBox() {
     fi
 }
 
+# Initialize Reality routing
+initXrayRealityRouting() {
+    local inboundConfig="/etc/v2ray-agent/xray/conf/07_VLESS_vision_reality_inbounds.json"
+    local routingConfig="/etc/v2ray-agent/xray/conf/09_routing.json"
+    local config rules='[]'
+    if [[ -f "${inboundConfig}" ]]; then
+        config=$(jq 'del(.routing) | .outbounds = [
+            {protocol:"freedom",tag:"reality_direct_outbound"},
+            {protocol:"blackhole",tag:"reality_blackhole_out"}
+        ]' "${inboundConfig}") || return 1
+        rules=$(echo "${config}" | jq -c '
+            .inbounds[0].tag as $tag
+            | .inbounds[1].streamSettings.realitySettings.serverNames as $domains
+            | [
+                {type:"field",inboundTag:[$tag],domain:($domains | map("full:" + .)),outboundTag:"reality_direct_outbound",ruleTag:"vasma-reality-allow"},
+                {type:"field",inboundTag:[$tag],outboundTag:"reality_blackhole_out",ruleTag:"vasma-reality-block"}
+            ]') || return 1
+        echo "${config}" | jq . >"${inboundConfig}"
+    fi
+    if [[ -f "${routingConfig}" ]]; then
+        config=$(cat "${routingConfig}")
+    elif [[ "${rules}" != '[]' ]]; then
+        config='{"routing":{"rules":[]}}'
+    else
+        return 0
+    fi
+    config=$(echo "${config}" | jq --argjson rules "${rules}" '.routing.rules = ($rules + [.routing.rules[]? | select(((.ruleTag // "") | startswith("vasma-reality-")) | not)])') || return 1
+    echo "${config}" | jq . >"${routingConfig}"
+}
+
 # Manipulate xray
 handleXray() {
     if [[ -n $(find /bin /usr/bin -name "systemctl") ]] && [[ -n $(find /etc/systemd/system/ -name "xray.service") ]]; then
         if [[ -z $(pgrep -f "xray/xray") ]] && [[ "$1" == "start" ]]; then
+            initXrayRealityRouting || return 1
             systemctl start xray.service
         elif [[ -n $(pgrep -f "xray/xray") ]] && [[ "$1" == "stop" ]]; then
             systemctl stop xray.service
         fi
     elif [[ -f "/etc/init.d/xray" ]]; then
         if [[ -z $(pgrep -f "xray/xray") ]] && [[ "$1" == "start" ]]; then
+            initXrayRealityRouting || return 1
             rc-service xray start
         elif [[ -n $(pgrep -f "xray/xray") ]] && [[ "$1" == "stop" ]]; then
             rc-service xray stop
@@ -4453,26 +4485,7 @@ EOF
         "routeOnly": true
       }
     }
-  ],
-  "routing": {
-    "rules": [
-      {
-        "inboundTag": [
-          "dokodemo-in"
-        ],
-        "domain": [
-          "${realityServerName}"
-        ],
-        "outboundTag": "z_direct_outbound"
-      },
-      {
-        "inboundTag": [
-          "dokodemo-in"
-        ],
-        "outboundTag": "blackhole_out"
-      }
-    ]
-  }
+  ]
 }
 EOF
         #        cat <<EOF >/etc/v2ray-agent/xray/conf/08_VLESS_vision_gRPC_inbounds.json
@@ -4522,6 +4535,7 @@ EOF
         addXrayOutbound z_direct_outbound
         addXrayOutbound blackhole_out
     fi
+    initXrayRealityRouting
 }
 
 # 初始化TCP Brutal
@@ -6715,12 +6729,12 @@ EOF
 EOF
         fi
 
-        if [[ ${realityStatus} == "7" ]]; then
+        if [[ -f "${configPath}07_VLESS_vision_reality_inbounds.json" ]]; then
             local vlessVisionRealityInbounds
-            vlessVisionRealityInbounds=$(jq -r ".inbounds[0].streamSettings.realitySettings.show=${realityLogShow}" ${configPath}07_VLESS_vision_reality_inbounds.json)
+            vlessVisionRealityInbounds=$(jq -r ".inbounds[1].streamSettings.realitySettings.show=${realityLogShow}" ${configPath}07_VLESS_vision_reality_inbounds.json)
             echo "${vlessVisionRealityInbounds}" | jq . >${configPath}07_VLESS_vision_reality_inbounds.json
         fi
-        if [[ ${realityStatus} == "12" ]]; then
+        if [[ -f "${configPath}12_VLESS_XHTTP_inbounds.json" ]]; then
             local vlessVisionRealityXHTTPInbounds
             vlessVisionRealityXHTTPInbounds=$(jq -r ".inbounds[0].streamSettings.realitySettings.show=${realityLogShow}" ${configPath}12_VLESS_XHTTP_inbounds.json)
             echo "${vlessVisionRealityXHTTPInbounds}" | jq . >${configPath}12_VLESS_XHTTP_inbounds.json
@@ -6903,10 +6917,10 @@ ipv6Routing() {
 # ipv6分流规则展示
 showIPv6Routing() {
     if [[ "${coreInstallType}" == "1" ]]; then
-        if [[ -f "${configPath}09_routing.json" ]]; then
+        if [[ -f "${configPath}09_routing.json" ]] && jq -e '.routing.rules[]? | select(((.ruleTag // "") | startswith("vasma-reality-")) | not)' "${configPath}09_routing.json" >/dev/null; then
             echoContent yellow "Xray-core："
             jq -r -c '.routing.rules[]|select (.outboundTag=="IPv6_out")|.domain' ${configPath}09_routing.json | jq -r
-        elif [[ ! -f "${configPath}09_routing.json" && -f "${configPath}IPv6_out.json" ]]; then
+        elif [[ -f "${configPath}IPv6_out.json" ]]; then
             echoContent yellow "Xray-core"
             echoContent green " ---> Configured IPv6 Global routing "
         else
@@ -6985,8 +6999,6 @@ EOF
         echoContent green " ---> BT download disabled successfully"
 
     elif [[ "${btStatus}" == "2" ]]; then
-
-        unInstallSniffing
 
         unInstallRouting blackhole_out outboundTag bittorrent
 
@@ -7469,18 +7481,6 @@ unInstallRouting() {
     fi
 }
 
-# Uninstall sniffing
-unInstallSniffing() {
-
-    find ${configPath} -name "*inbounds.json*" | awk -F "[c][o][n][f][/]" '{print $2}' | while read -r inbound; do
-        if grep -q "destOverride" <"${configPath}${inbound}"; then
-            sniffing=$(jq -r 'del(.inbounds[0].sniffing)' "${configPath}${inbound}")
-            echo "${sniffing}" | jq . >"${configPath}${inbound}"
-        fi
-    done
-
-}
-
 # Install sniffing
 installSniffing() {
     readInstallType
@@ -7536,10 +7536,10 @@ showWireGuardDomain() {
     local type=$1
     # xray
     if [[ "${coreInstallType}" == "1" ]]; then
-        if [[ -f "${configPath}09_routing.json" ]]; then
+        if [[ -f "${configPath}09_routing.json" ]] && jq -e '.routing.rules[]? | select(((.ruleTag // "") | startswith("vasma-reality-")) | not)' "${configPath}09_routing.json" >/dev/null; then
             echoContent yellow "Xray-core"
             jq -r -c '.routing.rules[]|select (.outboundTag=="wireguard_out_'"${type}"'")|.domain' ${configPath}09_routing.json | jq -r
-        elif [[ ! -f "${configPath}09_routing.json" && -f "${configPath}wireguard_out_${type}.json" ]]; then
+        elif [[ -f "${configPath}wireguard_out_${type}.json" ]]; then
             echoContent yellow "Xray-core"
             echoContent green " ---> Configured warp ${type} Global routing "
         else
@@ -7993,7 +7993,7 @@ showSingBoxRoutingRules() {
 # xray内核分流规则
 showXrayRoutingRules() {
     if [[ "${coreInstallType}" == "1" ]]; then
-        if [[ -f "${configPath}09_routing.json" ]]; then
+        if [[ -f "${configPath}09_routing.json" ]] && jq -e --arg tag "$1" '.routing.rules[]? | select(.outboundTag == $tag and .user == null)' "${configPath}09_routing.json" >/dev/null; then
             jq ".routing.rules[]|select(.outboundTag==\"$1\")" "${configPath}09_routing.json"
 
             echoContent yellow "\n Installed xray-core socks5 global outbound routing "
@@ -8157,7 +8157,7 @@ setSocks5InboundRouting() {
 
     singBoxConfigPath=/etc/v2ray-agent/sing-box/conf/config/
 
-    if [[ "$1" == "addRules" && ! -f "${singBoxConfigPath}socks5_02_inbound_route.json" && ! -f "${configPath}09_routing.json" ]]; then
+    if [[ "$1" == "addRules" && ! -f "${singBoxConfigPath}socks5_02_inbound_route.json" ]]; then
         echoContent red " ---> Install inbound routing before adding rules "
         echoContent red " ---> If all websites are currently allowed , Reinstall routing before configuring rules "
         exit 0
