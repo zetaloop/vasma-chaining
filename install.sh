@@ -2696,6 +2696,8 @@ updateGeoSite() {
         wget -c -q "${wgetShowProgressStatus}" -P ${configPath}../ "https://github.com/Loyalsoldier/v2ray-rules-dat/releases/download/${version}/geoip.dat"
     fi
 
+    rm -f "${configPath}../dlc.dat_plain.yml"
+    downloadDLCPlainYAML "${configPath%/conf/}" || return 1
     reloadCore
     echoContent green " ---> 更新完毕"
 
@@ -7290,6 +7292,7 @@ getDLCGeositeName() {
 
     local normalizedInput
     normalizedInput=$(echo "${inputRule}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    normalizedInput=${normalizedInput#geosite:}
     normalizedInput=${normalizedInput#domain:}
     normalizedInput=${normalizedInput#full:}
     normalizedInput=${normalizedInput#keyword:}
@@ -7323,7 +7326,14 @@ getDLCMatchedRuleValue() {
     local inputRule=$1
     local corePath=$2
     local normalizedInput=
-    normalizedInput=$(echo "${inputRule}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    normalizedInput=$(echo "${inputRule}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    case "${normalizedInput}" in
+    geosite:* | domain:* | full:* | keyword:* | regexp:* | ext:*)
+        echo "${normalizedInput}"
+        return
+        ;;
+    esac
+    normalizedInput=$(echo "${normalizedInput}" | tr '[:upper:]' '[:lower:]')
 
     if isDomainFormat "${normalizedInput}"; then
         local escapedDomain=
